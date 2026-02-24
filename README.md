@@ -6,8 +6,8 @@
      <i>A WebGPU-accelerated, force-directed<br>graph visualization library for the browser</i> 
      <br><br>
      <img src="https://img.shields.io/github/license/drkameleon/GraphGPU?style=for-the-badge">
-    <img src="https://img.shields.io/badge/powered_by-WebGPU-4285F4.svg?style=for-the-badge" alt="WebGPU"/>
-    <img src="https://img.shields.io/badge/language-TypeScript-3178C6.svg?style=for-the-badge" alt="TypeScript"/>
+     <img src="https://img.shields.io/badge/language-TypeScript-3178C6.svg?style=for-the-badge" alt="TypeScript"/>
+     <img src="https://img.shields.io/github/actions/workflow/status/drkameleon/GraphGPU/ci.yml?branch=main&style=for-the-badge" alt="Build status"/>
 </p>
 </div>
 
