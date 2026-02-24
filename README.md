@@ -2,6 +2,8 @@
     GraphGPU
 </h1>
 
+<img align="center" width="250" src="graphgpu.png"/>
+
 <p align="center">
      <i>A WebGPU-accelerated, force-directed<br>graph visualization library for the browser</i> 
      <br><br>
