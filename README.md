@@ -59,6 +59,15 @@ g.startLayout({ repulsion: 1.2, gravity: 0.12 });
 setTimeout(() => g.fitView(), 2000);
 ```
 
+> [!TIP]
+> Don't want to use a bundler? Grab `graphgpu.standalone.js` or `graphgpu.standalone.min.js` straight from the [latest release](https://github.com/drkameleon/GraphGPU/releases/latest) and drop it into a script tag:
+> ```html
+> <script src="graphgpu.standalone.min.js"></script>
+> <script>
+>     const g = new GraphGPU.GraphGPU({ canvas: '#my-canvas' });
+> </script>
+> ```
+
 ### Features
 
 - WebGPU-accelerated rendering via instanced draw calls
