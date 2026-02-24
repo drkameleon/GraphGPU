@@ -1,6 +1,6 @@
 <div align="center">
 
-<img align="center" width="500" src="graphgpu.png?v=2"/>
+<img align="center" width="500" src="logo.png"/>
 
 <p align="center">
      <i>A WebGPU-accelerated, force-directed<br>graph visualization library for the browser</i> 
