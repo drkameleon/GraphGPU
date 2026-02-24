@@ -2,16 +2,21 @@ name: CI
 
 on:
     push:
-        branches: [main]
+        branches:
+            - main
     pull_request:
-        branches: [main]
+        paths-ignore:
+            - 'docs/*'
+            - '*.yml'
+            - '*.md'
+            - 'LICENSE'
 
 permissions:
     contents: read
 
 jobs:
     build:
-        name: Type-check & Build
+        name: Test
         runs-on: ubuntu-latest
 
         strategy:
