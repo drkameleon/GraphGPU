@@ -1,8 +1,6 @@
-<h1 align="center">
-    GraphGPU
-</h1>
+<div align="center">
 
-<img align="center" width="250" src="graphgpu.png"/>
+<img align="center" width="500" src="graphgpu.png"/>
 
 <p align="center">
      <i>A WebGPU-accelerated, force-directed<br>graph visualization library for the browser</i> 
@@ -11,7 +9,7 @@
     <img src="https://img.shields.io/badge/powered_by-WebGPU-4285F4.svg?style=for-the-badge" alt="WebGPU"/>
     <img src="https://img.shields.io/badge/language-TypeScript-3178C6.svg?style=for-the-badge" alt="TypeScript"/>
 </p>
-
+</div>
 ---
 
 <!--ts-->
