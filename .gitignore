@@ -1,6 +1,12 @@
-
-# macOS
+node_modules/
+dist/
+*.tgz
+*.tar.gz
 .DS_Store
+Thumbs.db
+*.log
+.env
+.env.*
+.vite/
+.cache/
 
-# IDEs
-.vscode/
