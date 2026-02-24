@@ -1,5 +1,5 @@
 <h1 align="center">
-    graphGPU
+    GraphGPU
 </h1>
 
 <p align="center">
