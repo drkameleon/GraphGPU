@@ -29,7 +29,7 @@
 
 ### What does this do?
 
-**graphGPU** is a hardware-accelerated graph visualization library. Nodes, edges, labels, force-directed layout and interactive controls all run on the GPU via WebGPU.
+**GraphGPU** is a hardware-accelerated graph visualization library. Nodes, edges, labels, force-directed layout and interactive controls all run on the GPU via WebGPU.
 
 ### How do I use it?
 
@@ -162,7 +162,7 @@ src/
 
 ### Contributing
 
-You are 100% welcome! Just make a PR.
+You are 100% welcome! Just make a PR. 🚀
 
 <hr/>
 
