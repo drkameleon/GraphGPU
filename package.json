@@ -1,6 +1,6 @@
 {
   "name": "graphgpu",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Ultra-fast WebGPU graph visualization library",
   "author": "Yanis Zafirópulos <drkameleon>",
   "license": "MIT",
