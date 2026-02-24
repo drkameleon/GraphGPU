@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>graphGPU.js — Demo</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #08080c;
+      --bg-surface: #0e0e14;
+      --bg-elevated: #14141e;
+      --border: #1e1e2e;
+      --text: #e8e6f0;
+      --text-dim: #6a6880;
+      --text-muted: #3d3b50;
+      --accent: #7c6ff7;
+      --accent-glow: rgba(124, 111, 247, 0.15);
+      --tag-person: #ff6b6b;
+      --tag-movie: #ffd93d;
+      --tag-country: #6bcb77;
+      --tag-book: #4d96ff;
+      --radius: 8px;
+      --font-mono: 'JetBrains Mono', monospace;
+      --font-sans: 'Instrument Sans', sans-serif;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font-sans);
+      overflow: hidden;
+      height: 100vh;
+      width: 100vw;
+    }
+
+    /* Canvas fills the viewport */
+    #graph-canvas {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      cursor: grab;
+    }
+
+    #graph-canvas:active { cursor: grabbing; }
+
+    /* Top-left: Title + stats */
+    .header {
+      position: fixed;
+      top: 0; left: 0;
+      padding: 24px 28px;
+      z-index: 10;
+      pointer-events: none;
+    }
+
+    .header h1 {
+      font-family: var(--font-mono);
+      font-weight: 600;
+      font-size: 18px;
+      letter-spacing: -0.5px;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .header h1 .dot {
+      display: inline-block;
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 8px var(--accent);
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 0.6; }
+      50% { opacity: 1; }
+    }
+
+    .header .subtitle {
+      font-size: 12px;
+      color: var(--text-dim);
+      margin-top: 4px;
+      font-family: var(--font-mono);
+      font-weight: 300;
+    }
+
+    /* Top-right: Stats HUD */
+    .stats {
+      position: fixed;
+      top: 24px; right: 28px;
+      z-index: 10;
+      text-align: right;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text-dim);
+      line-height: 1.8;
+      pointer-events: none;
+    }
+
+    .stats .value {
+      color: var(--text);
+      font-weight: 500;
+    }
+
+    .stats .badge {
+      display: inline-block;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 2px 8px;
+      font-size: 10px;
+      color: var(--accent);
+      margin-top: 6px;
+    }
+
+    /* Bottom-left: Legend */
+    .legend {
+      position: fixed;
+      bottom: 24px; left: 28px;
+      z-index: 10;
+      display: flex;
+      gap: 16px;
+      pointer-events: none;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-family: var(--font-mono);
+      color: var(--text-dim);
+    }
+
+    .legend-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+    }
+
+    /* Bottom-right: Controls */
+    .controls {
+      position: fixed;
+      bottom: 24px; right: 28px;
+      z-index: 10;
+      display: flex;
+      gap: 6px;
+    }
+
+    .controls button {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      padding: 6px 14px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--bg-surface);
+      color: var(--text-dim);
+      cursor: pointer;
+      transition: all 0.15s;
+      pointer-events: all;
+    }
+
+    .controls button:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: var(--accent-glow);
+    }
+
+    .controls button.active {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: var(--accent-glow);
+    }
+
+    /* Node tooltip */
+    .tooltip {
+      position: fixed;
+      z-index: 100;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 10px 14px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.1s;
+      max-width: 260px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    }
+
+    .tooltip.visible { opacity: 1; }
+
+    .tooltip .tag {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 4px;
+    }
+
+    .tooltip .name {
+      font-weight: 600;
+      font-size: 13px;
+      color: var(--text);
+    }
+
+    .tooltip .props {
+      margin-top: 6px;
+      font-size: 11px;
+      color: var(--text-dim);
+      line-height: 1.6;
+    }
+
+    /* Palette selector */
+    .palette-bar {
+      position: fixed;
+      top: 50%;
+      right: 28px;
+      transform: translateY(-50%);
+      z-index: 10;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .palette-swatch {
+      width: 20px; height: 20px;
+      border-radius: 4px;
+      border: 2px solid transparent;
+      cursor: pointer;
+      transition: all 0.15s;
+      opacity: 0.5;
+    }
+
+    .palette-swatch:hover { opacity: 1; transform: scale(1.2); }
+    .palette-swatch.active { border-color: var(--text); opacity: 1; }
+
+    /* WebGPU unavailable overlay */
+    .fallback {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 1000;
+      background: var(--bg);
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 40px;
+    }
+
+    .fallback.visible { display: flex; }
+
+    .fallback h2 {
+      font-family: var(--font-mono);
+      font-size: 20px;
+      color: var(--tag-person);
+      margin-bottom: 12px;
+    }
+
+    .fallback p {
+      color: var(--text-dim);
+      max-width: 400px;
+      line-height: 1.7;
+      font-size: 14px;
+    }
+
+    .fallback code {
+      background: var(--bg-elevated);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="graph-canvas"></canvas>
+
+  <div class="header">
+    <h1><span class="dot"></span> graphGPU.js</h1>
+    <div class="subtitle">sample11 — cinema graph</div>
+  </div>
+
+  <div class="stats" id="stats">
+    loading...
+  </div>
+
+  <div class="legend" id="legend"></div>
+
+  <div class="controls">
+    <button id="btn-layout">⟳ layout</button>
+    <button id="btn-fit">⊞ fit</button>
+    <button id="btn-reset">↺ reset</button>
+    <button id="btn-bg">◑ bg</button>
+    <button id="btn-select" class="active">⊡ select</button>
+    <button id="btn-multi" class="active">⊞ multi</button>
+    <button id="btn-gravity">🧲 pull</button>
+  </div>
+
+  <div class="palette-bar" id="palette-bar"></div>
+
+  <div class="tooltip" id="tooltip">
+    <div class="tag" id="tooltip-tag"></div>
+    <div class="name" id="tooltip-name"></div>
+    <div class="props" id="tooltip-props"></div>
+  </div>
+
+  <div class="fallback" id="fallback">
+    <h2>WebGPU Not Available</h2>
+    <p>This demo requires WebGPU. Try <strong>Chrome 113+</strong>, <strong>Edge 113+</strong>, or <strong>Safari 18+</strong>.</p>
+  </div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

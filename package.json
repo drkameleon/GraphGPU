@@ -1,0 +1,50 @@
+{
+  "name": "graphgpu",
+  "version": "0.1.0",
+  "description": "Ultra-fast WebGPU graph visualization library",
+  "author": "Yanis Zafirópulos <drkameleon>",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run clean && npm run build"
+  },
+  "devDependencies": {
+    "@webgpu/types": "^0.1.40",
+    "typescript": "^5.4.0"
+  },
+  "keywords": [
+    "graph",
+    "visualization",
+    "webgpu",
+    "network",
+    "nodes",
+    "edges",
+    "force-directed",
+    "gpu",
+    "performance"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/arturo-lang/graphgpu.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
