@@ -75,7 +75,7 @@ setTimeout(() => g.fitView(), 2000);
 
 - **WebGPU-native rendering** — instanced draw calls, MSAA, SDF circles for nodes, anti-aliased edge quads
 - **Physics** — gravitational repulsion, Hooke spring edges, central gravity, viscous damping
-- **Dual layout engines** — CPU force layout for small/medium graphs, GPU compute shaders for large graphs
+- **Dual layout engines** — CPU force layout with Barnes-Hut O(n log n) repulsion, GPU compute shaders for large graphs
 - **Animated mode** — live physics simulation with interactive drag (pinned nodes, elastic rebalancing)
 - **8 built-in palettes** — `default`, `vibrant`, `pastel`, `earthy`, `inferno`, `playful`, `viridis`, `rainbow`
 - **Full interactivity** — pan, zoom, drag, select, multi-select, hover
@@ -154,7 +154,7 @@ The layout simulation is modeled after [vis.js network](https://visjs.github.io/
 
 | Force | Formula | Description |
 |-------|---------|-------------|
-| **Repulsion** | `F = G / dist²` | Gravitational N-body repulsion between all node pairs |
+| **Repulsion** | `F = G / dist²` | Barnes-Hut approximation (O(n log n) quadtree); falls back to brute-force when θ=0 |
 | **Springs** | `F = k × (L - dist) / dist` | Hooke's law along edges with rest length L |
 | **Central gravity** | `F = g / dist` | Pull toward origin to prevent drift |
 
@@ -164,6 +164,7 @@ Velocity integration uses viscous damping: `a = (F - damping × v) / mass`, then
 // All physics parameters are tunable:
 g.startLayout({
     gravitationalConstant: -0.25,  // negative = repulsive
+    barnesHutTheta: 0.3,           // 0 = exact O(n²), higher = faster approximation
     springLength: 0.2,             // edge rest length
     springConstant: 0.06,          // spring stiffness
     centralGravity: 0.012,         // pull toward center
@@ -180,8 +181,8 @@ g.startLayout({
 > // Now drag any node — connected nodes will follow with spring physics!
 > ```
 
-> [!WARNING]
-> The CPU layout uses O(n²) brute-force repulsion. For graphs with 500+ nodes, use `startGPULayout()` which runs the same physics model on GPU compute shaders with O(n²/64) parallelism.
+> [!NOTE]
+> The CPU layout uses Barnes-Hut quadtree approximation for O(n log n) repulsion. For exact (but slower) O(n²) computation, set `barnesHutTheta: 0`. The GPU layout path runs the same physics model on compute shaders with O(n²/64) parallelism — no Barnes-Hut yet, but raw GPU throughput compensates for medium-sized graphs.
 
 ### Demo
 
@@ -209,8 +210,9 @@ src/
     interaction/
         Controls.ts       # Mouse/touch/pinch input handling
     layout/
-        ForceLayout.ts    # CPU force-directed layout (vis.js model)
+        ForceLayout.ts    # CPU force-directed layout (Barnes-Hut)
         GPUForceLayout.ts # GPU compute force layout (5-pass pipeline)
+        QuadTree.ts       # Barnes-Hut quadtree for O(n log n) repulsion
     utils/
         color.ts          # Color parsing (hex, rgb, hsl)
         palette.ts        # 8 built-in color palettes

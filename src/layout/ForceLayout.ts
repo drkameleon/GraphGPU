@@ -3,6 +3,8 @@
 // ============================================================
 // Physics simulation inspired by vis.js network:
 //   - Gravitational repulsion between all nodes (N-body)
+//     → Barnes-Hut quadtree approximation: O(n log n)
+//     → Falls back to brute-force O(n²) when theta = 0
 //   - Hooke's law springs along edges (with rest length)
 //   - Central gravity pulling toward origin
 //   - Proper velocity integration: a = (F - damping*v) / mass
@@ -14,10 +16,13 @@
 
 import type { LayoutOptions } from '../types';
 import type { Graph } from '../core/Graph';
+import { QuadTree } from './QuadTree';
 
 export interface ForceLayoutConfig {
     // ── Repulsion (gravitational) ──
     gravitationalConstant: number; // negative = repulsive (vis.js default: -2000)
+    // ── Barnes-Hut ──
+    barnesHutTheta: number;        // approximation threshold (0 = brute-force, 0.5 = typical)
     // ── Springs (edges) ──
     springLength: number;          // rest length of edge springs (vis.js: 95)
     springConstant: number;        // spring stiffness (vis.js: 0.04)
@@ -35,6 +40,7 @@ export interface ForceLayoutConfig {
 const DEFAULTS: ForceLayoutConfig = {
     // Tuned for GraphGPU coordinate space (positions in [-1, 1] range).
     gravitationalConstant: -0.25,  // moderate repulsion
+    barnesHutTheta: 0.3,           // Barnes-Hut approximation (0 = brute-force)
     springLength: 0.2,             // short rest length → compact clusters
     springConstant: 0.06,          // moderate spring stiffness
     centralGravity: 0.012,         // strong pull → keeps graph centered and compact
@@ -54,6 +60,9 @@ export class ForceLayout {
     private running: boolean = false;
     private iteration: number = 0;
 
+    /** Barnes-Hut quadtree — reused across ticks (no re-allocation) */
+    private quadTree: QuadTree;
+
     /** Animated mode: layout never auto-stops, physics always live */
     private animated: boolean = false;
 
@@ -70,6 +79,7 @@ export class ForceLayout {
     ) {
         this.config = {
             gravitationalConstant: opts?.gravitationalConstant ?? DEFAULTS.gravitationalConstant,
+            barnesHutTheta: opts?.barnesHutTheta ?? DEFAULTS.barnesHutTheta,
             springLength: opts?.springLength ?? DEFAULTS.springLength,
             springConstant: opts?.springConstant ?? DEFAULTS.springConstant,
             centralGravity: opts?.centralGravity ?? DEFAULTS.centralGravity,
@@ -83,6 +93,7 @@ export class ForceLayout {
         const n = graph.numNodes;
         this.velocities = new Float32Array(n * 2);
         this.forces = new Float32Array(n * 2);
+        this.quadTree = new QuadTree();
     }
 
     // =========================================================
@@ -194,42 +205,15 @@ export class ForceLayout {
         // Reset forces
         forces.fill(0);
 
-        // ── 1. Node-node repulsion (gravitational, O(n²)) ──
-        // vis.js BarnesHut: F = G * m1 * m2 / dist²
-        // We use mass=1 for all, so F = G / dist²
+        // ── 1. Node-node repulsion ──
         const G = cfg.gravitationalConstant;
         if (G !== 0) {
-            for (let i = 0; i < n; i++) {
-                if (sizes[i] <= 0) continue;
-                const ix = i * 2;
-                const iy = ix + 1;
-
-                for (let j = i + 1; j < n; j++) {
-                    if (sizes[j] <= 0) continue;
-                    const jx = j * 2;
-                    const jy = jx + 1;
-
-                    let dx = pos[ix] - pos[jx];
-                    let dy = pos[iy] - pos[jy];
-                    let dist = Math.sqrt(dx * dx + dy * dy);
-
-                    if (dist === 0) {
-                        dx = 0.1 * Math.random();
-                        dy = 0.1 * Math.random();
-                        dist = Math.sqrt(dx * dx + dy * dy);
-                    }
-
-                    // G is negative → force pushes nodes apart
-                    const forceMag = G / (dist * dist);
-                    const fx = (dx / dist) * forceMag;
-                    const fy = (dy / dist) * forceMag;
-
-                    // Newton's 3rd law
-                    forces[ix] -= fx;
-                    forces[iy] -= fy;
-                    forces[jx] += fx;
-                    forces[jy] += fy;
-                }
+            if (cfg.barnesHutTheta > 0) {
+                // Barnes-Hut: O(n log n)
+                this.repulsionBarnesHut(n, pos, sizes, forces, G, cfg.barnesHutTheta);
+            } else {
+                // Brute-force: O(n²)
+                this.repulsionBruteForce(n, pos, sizes, forces, G);
             }
         }
 
@@ -317,6 +301,85 @@ export class ForceLayout {
         this.graph.dirtyEdges = true;
 
         return maxNodeVel;
+    }
+
+    // =========================================================
+    // Repulsion strategies
+    // =========================================================
+
+    /**
+     * Barnes-Hut approximation: O(n log n).
+     * Builds a quadtree, then walks it per-node, approximating
+     * distant clusters as single point masses.
+     */
+    private repulsionBarnesHut(
+        n: number,
+        pos: Float32Array,
+        sizes: Float32Array,
+        forces: Float32Array,
+        G: number,
+        theta: number,
+    ): void {
+        // Rebuild quadtree (O(n), the tree object is reused)
+        this.quadTree.build(pos, sizes, n);
+
+        for (let i = 0; i < n; i++) {
+            if (sizes[i] <= 0) continue;
+            const ix = i * 2;
+            const iy = ix + 1;
+
+            const [fx, fy] = this.quadTree.computeForce(
+                i, pos[ix], pos[iy], G, theta,
+            );
+
+            forces[ix] += fx;
+            forces[iy] += fy;
+        }
+    }
+
+    /**
+     * Brute-force O(n²) repulsion. Used when barnesHutTheta = 0
+     * or for very small graphs where the overhead isn't worth it.
+     */
+    private repulsionBruteForce(
+        n: number,
+        pos: Float32Array,
+        sizes: Float32Array,
+        forces: Float32Array,
+        G: number,
+    ): void {
+        for (let i = 0; i < n; i++) {
+            if (sizes[i] <= 0) continue;
+            const ix = i * 2;
+            const iy = ix + 1;
+
+            for (let j = i + 1; j < n; j++) {
+                if (sizes[j] <= 0) continue;
+                const jx = j * 2;
+                const jy = jx + 1;
+
+                let dx = pos[ix] - pos[jx];
+                let dy = pos[iy] - pos[jy];
+                let dist = Math.sqrt(dx * dx + dy * dy);
+
+                if (dist === 0) {
+                    dx = 0.1 * Math.random();
+                    dy = 0.1 * Math.random();
+                    dist = Math.sqrt(dx * dx + dy * dy);
+                }
+
+                // G is negative → force pushes nodes apart
+                const forceMag = G / (dist * dist);
+                const fx = (dx / dist) * forceMag;
+                const fy = (dy / dist) * forceMag;
+
+                // Newton's 3rd law
+                forces[ix] -= fx;
+                forces[iy] -= fy;
+                forces[jx] += fx;
+                forces[jy] += fy;
+            }
+        }
     }
 
     // =========================================================
