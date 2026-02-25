@@ -138,26 +138,46 @@ export type LayoutType = 'force' | 'force-gpu' | 'circular' | 'grid' | 'none';
 export interface LayoutOptions {
     type: LayoutType;
 
-    /** Force-directed: repulsion strength */
-    repulsion?: number;
+    // ── Repulsion ──
+    /** Gravitational constant (negative = repulsive). Default: -0.8 */
+    gravitationalConstant?: number;
 
-    /** Force-directed: attraction strength */
-    attraction?: number;
+    // ── Springs (edges) ──
+    /** Rest length of edge springs. Default: 0.5 */
+    springLength?: number;
+    /** Spring stiffness. Default: 0.08 */
+    springConstant?: number;
 
-    /** Force-directed: gravity toward center */
-    gravity?: number;
+    // ── Central gravity ──
+    /** Pull strength toward origin. Default: 0.003 */
+    centralGravity?: number;
 
-    /** Force-directed: velocity damping 0-1 */
+    // ── Integration ──
+    /** Velocity damping coefficient. Default: 0.09 */
     damping?: number;
-
-    /** Force-directed: Barnes-Hut theta */
-    barnesHutTheta?: number;
+    /** Integration timestep. Default: 0.5 */
+    timestep?: number;
+    /** Max velocity clamp. Default: 0.15 */
+    maxVelocity?: number;
+    /** Stabilization threshold (max node velocity). Default: 0.001 */
+    minVelocity?: number;
 
     /** Max iterations before auto-stop */
     maxIterations?: number;
 
+    /** Barnes-Hut theta (for future GPU layout) */
+    barnesHutTheta?: number;
+
     /** Run layout in Web Worker */
     useWorker?: boolean;
+
+    // ── Legacy (mapped internally) ──
+    /** @deprecated Use gravitationalConstant instead */
+    repulsion?: number;
+    /** @deprecated Use springConstant instead */
+    attraction?: number;
+    /** @deprecated Use centralGravity instead */
+    gravity?: number;
 }
 
 // -----------------------------------------------------------

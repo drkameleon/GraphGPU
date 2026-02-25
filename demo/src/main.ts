@@ -32,11 +32,7 @@ const NODE_TYPE_TAGS = ['person', 'movie', 'country', 'book'] as const;
 const PALETTE_NAMES = ['default', 'vibrant', 'pastel', 'earthy', 'inferno', 'playful', 'viridis', 'rainbow'] as const;
 
 const LAYOUT_OPTS = {
-    repulsion: 1.2,
-    attraction: 0.015,
-    gravity: 0.12,
-    damping: 0.9,
-    maxIterations: 400,
+    maxIterations: 1000,
 } as const;
 
 const LIGHT_BG: [number, number, number, number] = [0.96, 0.96, 0.965, 1];
@@ -61,7 +57,7 @@ createApp({
         // State
         const darkMode = ref(false);
         const layoutRunning = ref(true);
-        const gravityEnabled = ref(false);
+        const animatedEnabled = ref(false);
         const activePalette = ref('vibrant');
         const nodeCount = ref(0);
         const edgeCount = ref(0);
@@ -145,15 +141,19 @@ createApp({
             if (!g) return;
             if (layoutRunning.value) g.stopLayout();
             g.resetPositions();
+            // Pre-stabilize offscreen
+            for (let i = 0; i < 300; i++) {
+                g.stepLayout(3);
+            }
+            g.fitView(0.15);
             g.startLayout(LAYOUT_OPTS);
             layoutRunning.value = true;
-            g.resetView();
-            setTimeout(() => g!.fitView(0.15), 1500);
+            setTimeout(() => g!.fitView(0.15), 800);
         }
 
-        function toggleGravity(): void {
-            gravityEnabled.value = !gravityEnabled.value;
-            g?.setGravityPull(gravityEnabled.value, 0.15);
+        function toggleAnimated(): void {
+            animatedEnabled.value = !animatedEnabled.value;
+            g?.setAnimated(animatedEnabled.value);
         }
 
         // ── Theme ──
@@ -218,8 +218,8 @@ createApp({
             g = new GraphGPU({
                 canvas,
                 palette: 'vibrant',
-                nodeSize: 5,
-                edgeOpacity: 0.7,
+                nodeSize: 8,
+                edgeOpacity: 0.8,
                 antialias: true,
                 background: LIGHT_BG,
                 interaction: {
@@ -241,9 +241,18 @@ createApp({
             // ── Populate ──
             populateGraph(g);
 
-            // ── Layout ──
+            // ── Pre-stabilize layout (run offscreen before showing) ──
+            // Run many iterations synchronously so the graph is settled
+            // before the user sees anything.
+            for (let i = 0; i < 300; i++) {
+                g.stepLayout(3);
+            }
+            g.fitView(0.15);
+
+            // Now start the live layout for final settling
             g.startLayout(LAYOUT_OPTS);
-            setTimeout(() => g!.fitView(0.15), 1500);
+            // Fit again shortly after for any remaining drift
+            setTimeout(() => g!.fitView(0.15), 800);
             updateCounts();
             refreshLegend();
 
@@ -295,14 +304,14 @@ createApp({
         });
 
         return {
-            darkMode, layoutRunning, gravityEnabled, activePalette,
+            darkMode, layoutRunning, animatedEnabled, activePalette,
             nodeCount, edgeCount,
             selectedNode, selectedNodeColor, hoveredNode, hoveredNodeColor,
             hasSelection,
             tooltipVisible, tooltipStyle, tooltipTag, tooltipName, tooltipProps, tooltipColor,
             legendItems, paletteNames,
             editModal, deleteModal,
-            toggleLayout, fitView, resetGraph, toggleGravity, toggleDarkMode,
+            toggleLayout, fitView, resetGraph, toggleAnimated, toggleDarkMode,
             switchPalette, getPalettePreview,
             showEditModal, saveEdit, deleteSelected, confirmDelete,
         };
@@ -322,7 +331,6 @@ function populateGraph(g: GraphGPU): void {
     const fr = g.put('country', { name: 'France' });
     const de = g.put('country', { name: 'Germany' });
     const se = g.put('country', { name: 'Sweden' });
-    const _es = g.put('country', { name: 'Spain' });
     const pl = g.put('country', { name: 'Poland' });
 
     // People

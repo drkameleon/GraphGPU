@@ -269,11 +269,19 @@ export class GraphGPU {
      * Start force-directed layout.
      */
     startLayout(opts?: {
+        gravitationalConstant?: number;
+        springLength?: number;
+        springConstant?: number;
+        centralGravity?: number;
+        damping?: number;
+        timestep?: number;
+        maxVelocity?: number;
+        minVelocity?: number;
+        maxIterations?: number;
+        // Legacy compat
         repulsion?: number;
         attraction?: number;
         gravity?: number;
-        damping?: number;
-        maxIterations?: number;
     }): void {
         this.layout = new ForceLayout(this.graph, {
             type: 'force',
@@ -307,10 +315,13 @@ export class GraphGPU {
      * Falls back to CPU layout if GPU compute unavailable.
      */
     async startGPULayout(opts?: {
-        repulsion?: number;
-        attraction?: number;
-        gravity?: number;
+        gravitationalConstant?: number;
+        springLength?: number;
+        springConstant?: number;
+        centralGravity?: number;
         damping?: number;
+        timestep?: number;
+        maxVelocity?: number;
         stepsPerFrame?: number;
         maxIterations?: number;
     }): Promise<void> {
@@ -482,10 +493,34 @@ export class GraphGPU {
     }
 
     /**
-     * Enable gravity-pull mode: dragging a node pulls connected nodes with spring physics.
+     * Enable animated mode: live physics simulation that never auto-stops.
+     * Dragging a node pins it while the rest of the graph reacts with
+     * spring-like elasticity (vis.js-style "wobbly" physics).
      */
-    setGravityPull(enabled: boolean, strength?: number): void {
-        this.controls.setGravityPull(enabled, strength);
+    setAnimated(enabled: boolean): void {
+        if (!this.layout) {
+            // Create layout if not yet started
+            this.layout = new ForceLayout(this.graph, {
+                type: 'force',
+                ...this.options.layout,
+            });
+        }
+        this.layout.setAnimated(enabled);
+        this.controls.setAnimatedMode(enabled, this.layout);
+    }
+
+    /**
+     * Pin a node: its position is fixed, physics won't move it.
+     */
+    pinNode(nodeId: number): void {
+        this.layout?.pin(nodeId);
+    }
+
+    /**
+     * Unpin a node: rejoin the physics simulation.
+     */
+    unpinNode(nodeId: number): void {
+        this.layout?.unpin(nodeId);
     }
 
     // =========================================================

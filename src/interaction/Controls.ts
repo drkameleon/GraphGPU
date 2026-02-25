@@ -157,19 +157,19 @@ export class InteractionController {
     // Multi-select always active (without needing shift)
     private alwaysMultiSelect: boolean = false;
 
-    // Gravity-pull mode: dragging one node pulls connected nodes
-    private gravityPull: boolean = false;
-    private gravityPullStrength: number = 0.15;
+    // Animated mode: layout ref for pin/unpin during drag
+    private animatedMode: boolean = false;
+    private animatedLayout: import('../layout/ForceLayout').ForceLayout | null = null;
 
     /** Toggle multi-select always-on mode */
     setMultiSelectEnabled(enabled: boolean): void {
         this.alwaysMultiSelect = enabled;
     }
 
-    /** Toggle gravity-pull mode */
-    setGravityPull(enabled: boolean, strength?: number): void {
-        this.gravityPull = enabled;
-        if (strength !== undefined) this.gravityPullStrength = strength;
+    /** Set animated mode + provide layout reference for pin/unpin */
+    setAnimatedMode(enabled: boolean, layout: import('../layout/ForceLayout').ForceLayout | null): void {
+        this.animatedMode = enabled;
+        this.animatedLayout = layout;
     }
 
     /** Get currently hovered node */
@@ -238,6 +238,10 @@ export class InteractionController {
         if (hitNode !== null) {
             this.drag.nodeId = hitNode;
             this.drag.isPan = false;
+            // In animated mode, pin the dragged node so physics doesn't fight the cursor
+            if (this.animatedMode && this.animatedLayout) {
+                this.animatedLayout.pin(hitNode);
+            }
             // Don't change cursor yet - keep pointer until movement starts
         } else {
             this.drag.nodeId = null;
@@ -274,11 +278,6 @@ export class InteractionController {
                 const newY = this.graph.positions[id * 2 + 1] + ddy;
                 this.graph.setNodePosition(id, newX, newY);
 
-                // Gravity pull: connected nodes follow with spring force
-                if (this.gravityPull) {
-                    this.applyGravityPull(id, ddx, ddy);
-                }
-
                 this.emit('node:drag', this.graph.getNode(id));
             }
 
@@ -308,6 +307,10 @@ export class InteractionController {
             const isClick = !this.drag.moved;
 
             if (this.drag.nodeId !== null) {
+                // In animated mode, unpin the node so it rejoins physics
+                if (this.animatedMode && this.animatedLayout) {
+                    this.animatedLayout.unpin(this.drag.nodeId);
+                }
                 this.emit('node:dragend', this.graph.getNode(this.drag.nodeId));
 
                 // Selection happens on mouseUp (click without drag)
@@ -354,100 +357,6 @@ export class InteractionController {
         }
     }
 
-    // Velocity array for physics-based pull (lazy init)
-    private pullVelocities: Float32Array | null = null;
-    private pullAnimId: number = 0;
-
-    /**
-     * Gravity pull: apply impulse to all connected nodes via BFS.
-     * Nodes accumulate velocity and coast with damping after release.
-     */
-    private applyGravityPull(sourceId: NodeId, dx: number, dy: number): void {
-        const n = this.graph.numNodes;
-        if (!this.pullVelocities || this.pullVelocities.length < n * 2) {
-            this.pullVelocities = new Float32Array(n * 2);
-        }
-
-        const strength = this.gravityPullStrength;
-        const indices = this.graph.edgeIndices;
-        const edgeCount = this.graph.numEdges;
-
-        // Build adjacency
-        const adj = new Map<NodeId, NodeId[]>();
-        for (let i = 0; i < edgeCount; i++) {
-            if (!this.graph.isEdgeActive(i)) continue;
-            const src = indices[i * 2];
-            const tgt = indices[i * 2 + 1];
-            if (!adj.has(src)) adj.set(src, []);
-            if (!adj.has(tgt)) adj.set(tgt, []);
-            adj.get(src)!.push(tgt);
-            adj.get(tgt)!.push(src);
-        }
-
-        // BFS: apply velocity impulse with hop decay
-        const visited = new Set<NodeId>([sourceId]);
-        let frontier: NodeId[] = [sourceId];
-        let hop = 0;
-        const decay = 0.6;
-
-        while (frontier.length > 0 && hop < 12) {
-            hop++;
-            const factor = strength * Math.pow(decay, hop);
-            if (factor < 0.002) break;
-
-            const next: NodeId[] = [];
-            for (const node of frontier) {
-                for (const nb of (adj.get(node) ?? [])) {
-                    if (visited.has(nb) || !this.graph.isNodeActive(nb)) continue;
-                    visited.add(nb);
-                    next.push(nb);
-                    // Add to velocity (accumulates during drag)
-                    this.pullVelocities[nb * 2] += dx * factor;
-                    this.pullVelocities[nb * 2 + 1] += dy * factor;
-                }
-            }
-            frontier = next;
-        }
-
-        // Start coast animation if not already running
-        if (!this.pullAnimId) {
-            this.startPullCoast();
-        }
-    }
-
-    /** Animate pull velocities with damping until settled */
-    private startPullCoast(): void {
-        const damping = 0.92;
-        const minVel = 0.0001;
-
-        const tick = () => {
-            if (!this.pullVelocities) return;
-            const positions = this.graph.positions;
-            let maxV = 0;
-
-            for (const id of this.graph.activeNodeIds()) {
-                const vx = this.pullVelocities[id * 2] *= damping;
-                const vy = this.pullVelocities[id * 2 + 1] *= damping;
-
-                if (Math.abs(vx) > minVel || Math.abs(vy) > minVel) {
-                    positions[id * 2] += vx;
-                    positions[id * 2 + 1] += vy;
-                    maxV = Math.max(maxV, Math.abs(vx), Math.abs(vy));
-                }
-            }
-
-            if (maxV > minVel) {
-                this.graph.dirtyNodes = true;
-                this.graph.dirtyEdges = true;
-                this.pullAnimId = requestAnimationFrame(tick);
-            } else {
-                this.pullAnimId = 0;
-            }
-        };
-
-        this.pullAnimId = requestAnimationFrame(tick);
-    }
-
     // =========================================================
     // Touch handlers
     // =========================================================
@@ -490,6 +399,9 @@ export class InteractionController {
         if (hitNode !== null) {
             this.drag.nodeId = hitNode;
             this.drag.isPan = false;
+            if (this.animatedMode && this.animatedLayout) {
+                this.animatedLayout.pin(hitNode);
+            }
         } else {
             this.drag.nodeId = null;
             this.drag.isPan = true;
@@ -546,10 +458,6 @@ export class InteractionController {
             const newY = this.graph.positions[id * 2 + 1] + ddy;
             this.graph.setNodePosition(id, newX, newY);
 
-            if (this.gravityPull) {
-                this.applyGravityPull(id, ddx, ddy);
-            }
-
             this.emit('node:drag', this.graph.getNode(id));
         }
 
@@ -569,6 +477,10 @@ export class InteractionController {
             const isClick = !this.drag.moved;
 
             if (this.drag.nodeId !== null) {
+                // Unpin in animated mode
+                if (this.animatedMode && this.animatedLayout) {
+                    this.animatedLayout.unpin(this.drag.nodeId);
+                }
                 this.emit('node:dragend', this.graph.getNode(this.drag.nodeId));
 
                 if (isClick && this.opts.selection) {
