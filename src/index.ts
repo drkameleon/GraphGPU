@@ -488,6 +488,13 @@ export class GraphGPU {
         this.renderer.setEdgeOpacity(opacity);
     }
 
+    /**
+     * Show or hide all labels (node + edge).
+     */
+    setLabelsVisible(visible: boolean): void {
+        this.renderer.setLabelsVisible(visible);
+    }
+
     // =========================================================
     // Selection
     // =========================================================

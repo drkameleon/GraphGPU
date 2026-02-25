@@ -76,6 +76,7 @@ export class Renderer {
     // State
     private initialized: boolean = false;
     private animationId: number = 0;
+    private labelsVisible: boolean = true;
 
     constructor(
         private graph: Graph,
@@ -517,7 +518,12 @@ export class Renderer {
         this.device.queue.submit([encoder.finish()]);
 
         // Render edges + labels on Canvas2D overlay
-        this.renderOverlay();
+        if (this.labelsVisible) {
+            this.renderOverlay();
+        } else if (this.labelCtx && this.labelCanvas) {
+            // Clear overlay when labels are hidden
+            this.labelCtx.clearRect(0, 0, this.labelCanvas.width, this.labelCanvas.height);
+        }
 
         // FPS
         this.frameCount++;
@@ -574,6 +580,11 @@ export class Renderer {
     /** Change edge opacity at runtime */
     setEdgeOpacity(opacity: number): void {
         this.edgeOpacity = opacity;
+    }
+
+    /** Show or hide all labels (node + edge) */
+    setLabelsVisible(visible: boolean): void {
+        this.labelsVisible = visible;
     }
 
     /** Set selection state for a node (1.0 = selected, 0.0 = not) */
@@ -733,6 +744,8 @@ export class Renderer {
                     // Compute the actual label position (offset perpendicular to edge)
                     const perpX = -Math.sin(angle) * labelOffset;
                     const perpY = Math.cos(angle) * labelOffset;
+                    const labelX = sx + perpX;
+                    const labelY = sy - Math.abs(perpY);
 
                     // Skip if any part of the label overlaps any node circle.
                     // Test the label's bounding box corners (rotated) against node circles.
