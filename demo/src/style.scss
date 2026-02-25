@@ -112,75 +112,75 @@ body {
   gap: 2px;
 
   .brand {
-	font-family: $font-mono;
-	font-size: 13px;
-	font-weight: 500;
-	color: var(--text);
-	letter-spacing: -0.3px;
-	margin-right: 16px;
-	display: flex;
-	align-items: center;
-	gap: 7px;
+    font-family: $font-mono;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text);
+    letter-spacing: -0.3px;
+    margin-right: 16px;
+    display: flex;
+    align-items: center;
+    gap: 7px;
 
-	.dot {
-	  width: 6px;
-	  height: 6px;
-	  border-radius: 50%;
-	  background: var(--accent);
-	  box-shadow: 0 0 6px var(--accent);
-	  animation: pulse 2s ease-in-out infinite;
-	}
+    .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 6px var(--accent);
+      animation: pulse 2s ease-in-out infinite;
+    }
   }
 
   .sep {
-	width: 1px;
-	height: 20px;
-	background: var(--border);
-	margin: 0 8px;
+    width: 1px;
+    height: 20px;
+    background: var(--border);
+    margin: 0 8px;
   }
 
   .btn {
-	font-family: $font-sans;
-	font-size: 12px;
-	font-weight: 500;
-	padding: 4px 10px;
-	border: 1px solid transparent;
-	border-radius: $radius;
-	background: transparent;
-	color: var(--text-dim);
-	cursor: pointer;
-	transition: all 0.12s;
-	display: flex;
-	align-items: center;
-	gap: 5px;
-	white-space: nowrap;
+    font-family: $font-sans;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 4px 10px;
+    border: 1px solid transparent;
+    border-radius: $radius;
+    background: transparent;
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: all 0.12s;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    white-space: nowrap;
 
-	i { font-size: 14px; }
+    i { font-size: 14px; }
 
-	&:hover {
-	  background: var(--bg-elevated);
-	  color: var(--text);
-	  border-color: var(--border);
-	}
+    &:hover {
+      background: var(--bg-elevated);
+      color: var(--text);
+      border-color: var(--border);
+    }
 
-	&.active {
-	  background: var(--accent-soft);
-	  color: var(--accent);
-	  border-color: var(--accent);
-	}
+    &.active {
+      background: var(--accent-soft);
+      color: var(--accent);
+      border-color: var(--accent);
+    }
   }
 
   .spacer { flex: 1; }
 
   .stats {
-	font-family: $font-mono;
-	font-size: 11px;
-	color: var(--text-muted);
+    font-family: $font-mono;
+    font-size: 11px;
+    color: var(--text-muted);
 
-	b {
-	  color: var(--text-dim);
-	  font-weight: 500;
-	}
+    b {
+      color: var(--text-dim);
+      font-weight: 500;
+    }
   }
 }
 
@@ -198,9 +198,7 @@ body {
   top: $toolbar-h;
   left: 0;
   right: 0;
-  bottom: $statusbar-h;
-  // position:relative needed for the label overlay to attach here
-  position: relative;
+  height: calc(100vh - #{$toolbar-h} - #{$statusbar-h});
 }
 
 #graph-canvas {
@@ -227,9 +225,9 @@ body {
   transition: opacity 0.2s, transform 0.2s;
 
   &.hidden {
-	opacity: 0;
-	transform: translateX(20px);
-	pointer-events: none;
+    opacity: 0;
+    transform: translateX(20px);
+    pointer-events: none;
   }
 }
 
@@ -247,9 +245,9 @@ body {
   box-shadow: var(--shadow);
 
   &:hover {
-	border-color: var(--text-dim);
-	color: var(--text);
-	background: var(--bg-elevated);
+    border-color: var(--text-dim);
+    color: var(--text);
+    background: var(--bg-elevated);
   }
 
   &.green:hover { border-color: var(--green); color: var(--green); }
@@ -309,50 +307,50 @@ body {
   overflow: hidden;
 
   .tag {
-	@include mono-label;
-	padding: 1px 7px;
-	border-radius: 3px;
-	color: #fff;
-	flex-shrink: 0;
+    @include mono-label;
+    padding: 1px 7px;
+    border-radius: 3px;
+    color: #fff;
+    flex-shrink: 0;
   }
 
   .props {
-	display: flex;
-	gap: 4px;
-	overflow: hidden;
-	flex: 1;
+    display: flex;
+    gap: 4px;
+    overflow: hidden;
+    flex: 1;
   }
 
   .prop {
-	display: flex;
-	gap: 3px;
-	white-space: nowrap;
-	align-items: center;
+    display: flex;
+    gap: 3px;
+    white-space: nowrap;
+    align-items: center;
 
-	&::before {
-	  content: '⁞';
-	  color: var(--text-muted);
-	  margin-right: 2px;
-	}
+    &::before {
+      content: '⁞';
+      color: var(--text-muted);
+      margin-right: 2px;
+    }
 
-	&:first-child::before { display: none; }
+    &:first-child::before { display: none; }
 
-	b { font-weight: 600; font-size: 11px; color: var(--text-dim); }
-	span { color: var(--text); }
+    b { font-weight: 600; font-size: 11px; color: var(--text-dim); }
+    span { color: var(--text); }
   }
 
   .idle-text { color: var(--text-muted); }
   .spacer { flex: 1; }
 
   .badge {
-	font-family: $font-mono;
-	font-size: 10px;
-	padding: 1px 6px;
-	border-radius: 3px;
-	background: var(--bg-elevated);
-	border: 1px solid var(--border);
-	color: var(--accent);
-	flex-shrink: 0;
+    font-family: $font-mono;
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    color: var(--accent);
+    flex-shrink: 0;
   }
 }
 
@@ -407,23 +405,23 @@ body {
   &.visible { opacity: 1; }
 
   .tt-tag {
-	@include mono-label;
-	letter-spacing: 0.8px;
-	margin-bottom: 2px;
+    @include mono-label;
+    letter-spacing: 0.8px;
+    margin-bottom: 2px;
   }
 
   .tt-name {
-	font-weight: 600;
-	font-size: 13px;
-	color: var(--text);
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--text);
   }
 
   .tt-props {
-	margin-top: 4px;
-	font-size: 11px;
-	color: var(--text-dim);
-	line-height: 1.5;
-	white-space: pre-line;
+    margin-top: 4px;
+    font-size: 11px;
+    color: var(--text-dim);
+    line-height: 1.5;
+    white-space: pre-line;
   }
 }
 
@@ -463,15 +461,15 @@ body {
   justify-content: space-between;
 
   .close {
-	background: none;
-	border: none;
-	color: var(--text-muted);
-	font-size: 18px;
-	cursor: pointer;
-	padding: 2px;
-	line-height: 1;
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 18px;
+    cursor: pointer;
+    padding: 2px;
+    line-height: 1;
 
-	&:hover { color: var(--text); }
+    &:hover { color: var(--text); }
   }
 }
 
@@ -482,22 +480,22 @@ body {
   gap: 10px;
 
   label {
-	@include mono-label;
-	color: var(--text-dim);
+    @include mono-label;
+    color: var(--text-dim);
   }
 
   input, select {
-	font-family: $font-sans;
-	font-size: 13px;
-	padding: 7px 10px;
-	border: 1px solid var(--border);
-	border-radius: $radius;
-	background: var(--bg-darker);
-	color: var(--text);
-	outline: none;
-	transition: border-color 0.15s;
+    font-family: $font-sans;
+    font-size: 13px;
+    padding: 7px 10px;
+    border: 1px solid var(--border);
+    border-radius: $radius;
+    background: var(--bg-darker);
+    color: var(--text);
+    outline: none;
+    transition: border-color 0.15s;
 
-	&:focus { border-color: var(--accent); }
+    &:focus { border-color: var(--accent); }
   }
 }
 
@@ -518,13 +516,13 @@ body {
   gap: 8px;
 
   button {
-	font-family: $font-sans;
-	font-size: 12px;
-	font-weight: 500;
-	padding: 6px 16px;
-	border-radius: $radius;
-	cursor: pointer;
-	transition: all 0.12s;
+    font-family: $font-sans;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 6px 16px;
+    border-radius: $radius;
+    cursor: pointer;
+    transition: all 0.12s;
   }
 }
 
@@ -569,23 +567,24 @@ body {
   z-index: 1000;
   background: var(--bg);
   flex-direction: column;
-  @include flex-center;
+  align-items: center;
+  justify-content: center;
   text-align: center;
   padding: 40px;
 
   &.visible { display: flex; }
 
   h2 {
-	font-family: $font-mono;
-	font-size: 18px;
-	color: var(--red);
-	margin-bottom: 10px;
+    font-family: $font-mono;
+    font-size: 18px;
+    color: var(--red);
+    margin-bottom: 10px;
   }
 
   p {
-	color: var(--text-dim);
-	max-width: 380px;
-	line-height: 1.6;
-	font-size: 14px;
+    color: var(--text-dim);
+    max-width: 380px;
+    line-height: 1.6;
+    font-size: 14px;
   }
 }
