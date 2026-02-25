@@ -733,8 +733,6 @@ export class Renderer {
                     // Compute the actual label position (offset perpendicular to edge)
                     const perpX = -Math.sin(angle) * labelOffset;
                     const perpY = Math.cos(angle) * labelOffset;
-                    const labelX = sx + perpX;
-                    const labelY = sy - Math.abs(perpY);
 
                     // Skip if any part of the label overlaps any node circle.
                     // Test the label's bounding box corners (rotated) against node circles.
