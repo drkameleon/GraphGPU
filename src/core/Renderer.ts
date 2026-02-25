@@ -688,10 +688,15 @@ export class Renderer {
             // ---- Edge labels ----
             // Render edge tags at the midpoint of each edge, sized by zoom
             const camZoomGlobal = Math.abs(this.camera.matrix[0]);
-            const edgeFontSize = Math.max(7, Math.min(camZoomGlobal * cw * 0.008, 13));
+            const edgeFontSize = Math.max(8, Math.min(camZoomGlobal * cw * 0.012, 16));
+
+            // Compute edge visual width in CSS pixels (mirrors shader logic)
+            const minEdgeW = 3.0; // matches shader minWidth in px
+            const zoomEdgeW = 0.004 * camZoomGlobal * cw * 0.5; // matches shader zoomWidth → CSS px
+            const edgeWidthPx = Math.max(minEdgeW, zoomEdgeW);
 
             // Only render edge labels when zoomed in enough to read them
-            if (edgeFontSize >= 8) {
+            if (edgeFontSize >= 9) {
                 lctx.font = `500 ${edgeFontSize}px -apple-system,"Segoe UI",Helvetica,Arial,sans-serif`;
                 lctx.textAlign = 'center';
                 lctx.textBaseline = 'middle';
@@ -699,6 +704,9 @@ export class Renderer {
 
                 const edgeIndices = this.graph.edgeIndices;
                 const pos = this.graph.positions;
+
+                // Offset: half the rendered edge line width + comfortable gap + half font height
+                const labelOffset = edgeWidthPx * 0.5 + edgeFontSize * 0.55 + 3;
 
                 for (const eid of this.graph.activeEdgeIds()) {
                     const src = edgeIndices[eid * 2];
@@ -727,13 +735,13 @@ export class Renderer {
 
                     // Skip very short edges where label won't fit
                     const edgeLen = Math.hypot(sx2 - sx1, sy2 - sy1);
-                    if (edgeLen < 30) continue;
+                    if (edgeLen < 40) continue;
 
                     lctx.save();
                     lctx.translate(sx, sy);
                     lctx.rotate(angle);
-                    // Offset slightly above the edge line
-                    lctx.fillText(edge.tag, 0, -edgeFontSize * 0.7);
+                    // Offset above the edge line, accounting for edge visual thickness
+                    lctx.fillText(edge.tag, 0, -labelOffset);
                     lctx.restore();
                 }
             }
