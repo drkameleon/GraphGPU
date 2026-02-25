@@ -97,16 +97,15 @@ fn fs_node(in: VSOut) -> @location(0) vec4f {
   // Selection: ring outline using node's own color, shifted for contrast
   if (in.selection > 0.5) {
     let innerR = 1.0 / (1.0 + 0.15);  // matches haloExpand
-    let ring = smoothstep(innerR - aa, innerR, dist) * smoothstep(1.0, 1.0 - aa * 2.0, dist);
-    // Darken for light theme, lighten for dark theme (based on node luminance)
+    let ring = smoothstep(innerR - aa * 1.5, innerR, dist) * smoothstep(1.0, 1.0 - aa * 3.0, dist);
+    // Use node's own color: lighter version for dark nodes, darker for bright nodes
     let lum = dot(baseColor, vec3f(0.2126, 0.7152, 0.0722));
-    var haloColor = select(
-      baseColor * 1.6 + 0.15,    // lighten: bright node color for dark backgrounds
-      baseColor * 0.45,           // darken: deeper version for light backgrounds
-      lum > 0.45
-    );
-    haloColor = clamp(haloColor, vec3f(0.0), vec3f(1.0));
-    finalColor = mix(finalColor, haloColor, ring);
+    // Lighten: mix toward white but keep color identity
+    let lighter = mix(baseColor, vec3f(1.0), 0.55);
+    // Darken: multiply down but keep saturation
+    let darker = baseColor * 0.35;
+    var haloColor = select(lighter, darker, lum > 0.5);
+    finalColor = mix(finalColor, haloColor, ring * 0.95);
   }
 
   return vec4f(finalColor * edge, in.color.a * edge);
@@ -183,9 +182,9 @@ fn vs_edge(
   let fwd = dir / len;
   let perp = vec2f(-fwd.y, fwd.x);
 
-  // Width: 1.5px minimum on screen, grows with zoom
-  let minWidth = 1.5 / frame.viewport.y;
-  let zoomWidth = 0.003 * length(vec2f(frame.camera.col0.x, frame.camera.col0.y));
+  // Width: 2px minimum on screen, grows with zoom
+  let minWidth = 2.0 / frame.viewport.y;
+  let zoomWidth = 0.0035 * length(vec2f(frame.camera.col0.x, frame.camera.col0.y));
   let w = max(minWidth, zoomWidth);
 
   let pos = mix(srcProj, tgtProj, t) + perp * s * w;
