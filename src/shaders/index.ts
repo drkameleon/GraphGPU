@@ -100,7 +100,7 @@ fn fs_node(in: VSOut) -> @location(0) vec4f {
     let ring = smoothstep(innerR - aa, innerR, dist) * smoothstep(1.0, 1.0 - aa * 2.0, dist);
     // Darken for light theme, lighten for dark theme (based on node luminance)
     let lum = dot(baseColor, vec3f(0.2126, 0.7152, 0.0722));
-    let haloColor = select(
+    var haloColor = select(
       baseColor * 1.6 + 0.15,    // lighten: bright node color for dark backgrounds
       baseColor * 0.45,           // darken: deeper version for light backgrounds
       lum > 0.45
