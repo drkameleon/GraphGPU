@@ -125,7 +125,9 @@
       bottom: 24px; left: 28px;
       z-index: 10;
       display: flex;
-      gap: 16px;
+      flex-wrap: wrap;
+      gap: 8px 16px;
+      max-width: calc(100vw - 450px); /* leave room for controls on the right */
       pointer-events: none;
     }
 
