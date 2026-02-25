@@ -252,13 +252,14 @@ export class Renderer {
                 module: edgeModule,
                 entryPoint: 'vs_edge',
                 buffers: [{
-                    // Per-instance: srcPos(vec2f) + tgtPos(vec2f) + alpha(f32)
-                    arrayStride: 20,
+                    // Per-instance: srcPos(vec2f) + tgtPos(vec2f) + alpha(f32) + color(vec3f)
+                    arrayStride: 32,  // 8 floats × 4 bytes
                     stepMode: 'instance',
                     attributes: [
                         { shaderLocation: 0, offset: 0, format: 'float32x2' },   // srcPos
                         { shaderLocation: 1, offset: 8, format: 'float32x2' },   // tgtPos
                         { shaderLocation: 2, offset: 16, format: 'float32' },    // alpha
+                        { shaderLocation: 3, offset: 20, format: 'float32x3' },  // color RGB
                     ],
                 }],
             },
@@ -333,11 +334,11 @@ export class Renderer {
         const cap = Math.max(capacity, 512);
         this.gpuEdgeVerts?.destroy();
         this.gpuEdgeVerts = this.device.createBuffer({
-            size: cap * 5 * 4, // 5 floats per edge instance (srcXY, tgtXY, alpha)
+            size: cap * 8 * 4, // 8 floats per edge instance (srcXY, tgtXY, alpha, RGB)
             usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
         });
         this.gpuEdgeCapacity = cap;
-        this.edgeVertexData = new Float32Array(cap * 5);
+        this.edgeVertexData = new Float32Array(cap * 8);
     }
 
     private uploadNodeData(): void {
@@ -385,6 +386,7 @@ export class Renderer {
 
         const positions = this.graph.positions;
         const indices = this.graph.edgeIndices;
+        const edgeColors = this.graph.edgeColors;
         let writeIdx = 0;
         let visibleEdges = 0;
 
@@ -394,12 +396,15 @@ export class Renderer {
             if (!this.graph.isNodeActive(src) || !this.graph.isNodeActive(tgt)) continue;
             if (!this.graph.isEdgeActive(i)) continue;
 
-            // Per-instance: srcX, srcY, tgtX, tgtY, alpha
+            // Per-instance: srcX, srcY, tgtX, tgtY, alpha, R, G, B
             this.edgeVertexData[writeIdx++] = positions[src * 2];
             this.edgeVertexData[writeIdx++] = positions[src * 2 + 1];
             this.edgeVertexData[writeIdx++] = positions[tgt * 2];
             this.edgeVertexData[writeIdx++] = positions[tgt * 2 + 1];
             this.edgeVertexData[writeIdx++] = 1.0;
+            this.edgeVertexData[writeIdx++] = edgeColors[i * 3];
+            this.edgeVertexData[writeIdx++] = edgeColors[i * 3 + 1];
+            this.edgeVertexData[writeIdx++] = edgeColors[i * 3 + 2];
             visibleEdges++;
         }
 
@@ -408,7 +413,7 @@ export class Renderer {
         if (visibleEdges > 0) {
             this.device.queue.writeBuffer(
                 this.gpuEdgeVerts, 0,
-                this.edgeVertexData.buffer, 0, visibleEdges * 5 * 4,
+                this.edgeVertexData.buffer, 0, visibleEdges * 8 * 4,
             );
         }
 
