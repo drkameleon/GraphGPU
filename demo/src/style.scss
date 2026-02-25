@@ -1,0 +1,590 @@
+// ============================================================
+// graphGPU Demo — Styles (SCSS)
+// Light theme by default, body.dark overrides
+// ============================================================
+
+// ── SCSS Variables ──
+
+$font-sans: 'Source Sans 3', 'Source Sans Pro', sans-serif;
+$font-mono: 'Fira Code', monospace;
+$toolbar-h: 42px;
+$statusbar-h: 34px;
+$radius: 6px;
+$transition-theme: 0.25s;
+
+// ── Mixins ──
+
+@mixin flex-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+@mixin fixed-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  background: var(--bg-darker);
+  transition: background $transition-theme, border-color $transition-theme;
+}
+
+@mixin mono-label {
+  font-family: $font-mono;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+// ============================================================
+// CSS Custom Properties (light = default, dark = override)
+// ============================================================
+
+:root {
+  --bg: #f5f5f7;
+  --bg-darker: #eaeaee;
+  --bg-surface: #ffffff;
+  --bg-elevated: #ffffff;
+  --border: #d8d8de;
+  --border-subtle: #e2e2e8;
+  --text: #1d1d1f;
+  --text-dim: #6e6e73;
+  --text-muted: #aeaeb2;
+  --accent: #6850d8;
+  --accent-soft: rgba(104, 80, 216, 0.08);
+  --green: #34a853;
+  --red: #c0392b;
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+body.dark {
+  --bg: #1e1f26;
+  --bg-darker: #181920;
+  --bg-surface: #252630;
+  --bg-elevated: #2c2d3a;
+  --border: #363744;
+  --border-subtle: #2e2f3c;
+  --text: #d8d6e0;
+  --text-dim: #8a889a;
+  --text-muted: #555466;
+  --accent: #7c6ff7;
+  --accent-soft: rgba(124, 111, 247, 0.12);
+  --green: #4caf7c;
+  --red: #c0392b;
+  --shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+// ============================================================
+// Reset
+// ============================================================
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: $font-sans;
+  overflow: hidden;
+  height: 100vh;
+  width: 100vw;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: background $transition-theme, color $transition-theme;
+}
+
+// ============================================================
+// Toolbar
+// ============================================================
+
+.toolbar {
+  @include fixed-bar;
+  top: 0;
+  height: $toolbar-h;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  gap: 2px;
+
+  .brand {
+    font-family: $font-mono;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text);
+    letter-spacing: -0.3px;
+    margin-right: 16px;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+
+    .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 6px var(--accent);
+      animation: pulse 2s ease-in-out infinite;
+    }
+  }
+
+  .sep {
+    width: 1px;
+    height: 20px;
+    background: var(--border);
+    margin: 0 8px;
+  }
+
+  .btn {
+    font-family: $font-sans;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 4px 10px;
+    border: 1px solid transparent;
+    border-radius: $radius;
+    background: transparent;
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: all 0.12s;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    white-space: nowrap;
+
+    i { font-size: 14px; }
+
+    &:hover {
+      background: var(--bg-elevated);
+      color: var(--text);
+      border-color: var(--border);
+    }
+
+    &.active {
+      background: var(--accent-soft);
+      color: var(--accent);
+      border-color: var(--accent);
+    }
+  }
+
+  .spacer { flex: 1; }
+
+  .stats {
+    font-family: $font-mono;
+    font-size: 11px;
+    color: var(--text-muted);
+
+    b {
+      color: var(--text-dim);
+      font-weight: 500;
+    }
+  }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+
+// ============================================================
+// Canvas Container
+// ============================================================
+
+.canvas-container {
+  position: fixed;
+  top: $toolbar-h;
+  left: 0;
+  right: 0;
+  height: calc(100vh - #{$toolbar-h} - #{$statusbar-h});
+}
+
+#graph-canvas {
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+  display: block;
+
+  &:active { cursor: grabbing; }
+}
+
+// ============================================================
+// Context Panel (right, appears on selection)
+// ============================================================
+
+.context-panel {
+  position: fixed;
+  top: calc(#{$toolbar-h} + 12px);
+  right: 12px;
+  z-index: 15;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: opacity 0.2s, transform 0.2s;
+
+  &.hidden {
+    opacity: 0;
+    transform: translateX(20px);
+    pointer-events: none;
+  }
+}
+
+.ctx-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  background: var(--bg-surface);
+  color: var(--text-dim);
+  @include flex-center;
+  cursor: pointer;
+  font-size: 16px;
+  transition: all 0.15s;
+  box-shadow: var(--shadow);
+
+  &:hover {
+    border-color: var(--text-dim);
+    color: var(--text);
+    background: var(--bg-elevated);
+  }
+
+  &.green:hover { border-color: var(--green); color: var(--green); }
+  &.red:hover   { border-color: var(--red);   color: var(--red); }
+}
+
+.ctx-sep {
+  width: 18px;
+  height: 0;
+  border-top: 2px dotted var(--border);
+  margin: 2px auto;
+}
+
+// ============================================================
+// Palette Bar (left)
+// ============================================================
+
+.palette-bar {
+  position: fixed;
+  top: 50%;
+  left: 12px;
+  transform: translateY(-50%);
+  z-index: 15;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.palette-swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: all 0.12s;
+  opacity: 0.4;
+
+  &:hover { opacity: 0.9; transform: scale(1.15); }
+  &.active { border-color: var(--text); opacity: 1; }
+}
+
+// ============================================================
+// Status Bar (bottom)
+// ============================================================
+
+.statusbar {
+  @include fixed-bar;
+  bottom: 0;
+  height: $statusbar-h;
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  font-size: 12px;
+  color: var(--text-dim);
+  gap: 6px;
+  overflow: hidden;
+
+  .tag {
+    @include mono-label;
+    padding: 1px 7px;
+    border-radius: 3px;
+    color: #fff;
+    flex-shrink: 0;
+  }
+
+  .props {
+    display: flex;
+    gap: 4px;
+    overflow: hidden;
+    flex: 1;
+  }
+
+  .prop {
+    display: flex;
+    gap: 3px;
+    white-space: nowrap;
+    align-items: center;
+
+    &::before {
+      content: '⁞';
+      color: var(--text-muted);
+      margin-right: 2px;
+    }
+
+    &:first-child::before { display: none; }
+
+    b { font-weight: 600; font-size: 11px; color: var(--text-dim); }
+    span { color: var(--text); }
+  }
+
+  .idle-text { color: var(--text-muted); }
+  .spacer { flex: 1; }
+
+  .badge {
+    font-family: $font-mono;
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    color: var(--accent);
+    flex-shrink: 0;
+  }
+}
+
+// ============================================================
+// Legend
+// ============================================================
+
+.legend {
+  position: fixed;
+  bottom: calc(#{$statusbar-h} + 10px);
+  left: 14px;
+  z-index: 15;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  pointer-events: none;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-family: $font-mono;
+  color: var(--text-dim);
+}
+
+.legend-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+// ============================================================
+// Tooltip
+// ============================================================
+
+.tooltip {
+  position: fixed;
+  z-index: 100;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: $radius;
+  padding: 8px 12px;
+  font-size: 12px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.1s;
+  max-width: 240px;
+  box-shadow: var(--shadow);
+
+  &.visible { opacity: 1; }
+
+  .tt-tag {
+    @include mono-label;
+    letter-spacing: 0.8px;
+    margin-bottom: 2px;
+  }
+
+  .tt-name {
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--text);
+  }
+
+  .tt-props {
+    margin-top: 4px;
+    font-size: 11px;
+    color: var(--text-dim);
+    line-height: 1.5;
+    white-space: pre-line;
+  }
+}
+
+// ============================================================
+// Modals
+// ============================================================
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  z-index: 200;
+  @include flex-center;
+
+  body.dark & { background: rgba(0, 0, 0, 0.55); }
+}
+
+.modal-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  width: 380px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.15);
+  overflow: hidden;
+
+  body.dark & { box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5); }
+}
+
+.modal-head {
+  padding: 12px 16px;
+  background: var(--bg-darker);
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  .close {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 18px;
+    cursor: pointer;
+    padding: 2px;
+    line-height: 1;
+
+    &:hover { color: var(--text); }
+  }
+}
+
+.modal-body {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+
+  label {
+    @include mono-label;
+    color: var(--text-dim);
+  }
+
+  input, select {
+    font-family: $font-sans;
+    font-size: 13px;
+    padding: 7px 10px;
+    border: 1px solid var(--border);
+    border-radius: $radius;
+    background: var(--bg-darker);
+    color: var(--text);
+    outline: none;
+    transition: border-color 0.15s;
+
+    &:focus { border-color: var(--accent); }
+  }
+}
+
+.confirm-text {
+  font-size: 13px;
+  color: var(--text-dim);
+  line-height: 1.5;
+
+  b { color: var(--text); }
+}
+
+.modal-foot {
+  padding: 10px 16px;
+  background: var(--bg-darker);
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+
+  button {
+    font-family: $font-sans;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 6px 16px;
+    border-radius: $radius;
+    cursor: pointer;
+    transition: all 0.12s;
+  }
+}
+
+.btn-cancel {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+
+  &:hover { color: var(--text); border-color: var(--text-dim); }
+}
+
+.btn-save {
+  background: var(--green);
+  border: 1px solid var(--green);
+  color: #fff;
+
+  &:hover { filter: brightness(1.1); }
+}
+
+.btn-danger {
+  background: var(--red);
+  border: 1px solid var(--red);
+  color: #fff;
+
+  &:hover { filter: brightness(1.1); }
+}
+
+.field-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+// ============================================================
+// Fallback
+// ============================================================
+
+.fallback {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: var(--bg);
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 40px;
+
+  &.visible { display: flex; }
+
+  h2 {
+    font-family: $font-mono;
+    font-size: 18px;
+    color: var(--red);
+    margin-bottom: 10px;
+  }
+
+  p {
+    color: var(--text-dim);
+    max-width: 380px;
+    line-height: 1.6;
+    font-size: 14px;
+  }
+}

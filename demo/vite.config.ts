@@ -7,4 +7,11 @@ export default defineConfig({
             'graphgpu': resolve(__dirname, '../src'),
         },
     },
+    css: {
+        preprocessorOptions: {
+            scss: {
+                api: 'modern-compiler',
+            },
+        },
+    },
 });

@@ -41,7 +41,7 @@ const g = new GraphGPU({
     canvas: '#my-canvas',
     nodeSize: 6,
     edgeOpacity: 0.7,
-    palette: 'cozy',
+    palette: 'vibrant',
 });
 
 await g.init();
@@ -72,7 +72,7 @@ setTimeout(() => g.fitView(), 2000);
 
 - WebGPU-accelerated rendering via instanced draw calls
 - Force-directed layout (CPU and GPU compute engines)
-- 9 built-in color palettes (`cozy`, `moss`, `candy`, etc.)
+- 8 built-in color palettes (`default`, `vibrant`, `pastel`, `earthy`, `inferno`, `playful`, `viridis`, `rainbow`)
 - Pan, zoom, drag, select, multi-select, hover
 - Gravity-pull mode: drag a node and the whole graph follows with spring physics
 - Canvas2D label overlay with auto-sizing and truncation
