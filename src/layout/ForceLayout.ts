@@ -32,6 +32,12 @@ export class ForceLayout {
     private running: boolean = false;
     private iteration: number = 0;
 
+    /** Animated mode: layout never auto-stops, physics are always live */
+    private animated: boolean = false;
+
+    /** Pinned nodes: positions set externally (e.g. by dragging), skip integration */
+    private pinned: Set<number> = new Set();
+
     // Callbacks
     onTick?: (iteration: number, energy: number) => void;
     onStop?: () => void;
@@ -50,6 +56,33 @@ export class ForceLayout {
         };
 
         this.velocities = new Float32Array(graph.numNodes * 2);
+    }
+
+    /** Enable/disable animated mode (live physics, never auto-stops) */
+    setAnimated(enabled: boolean): void {
+        this.animated = enabled;
+        // If turning on and not running, restart
+        if (enabled && !this.running) {
+            this.start();
+        }
+    }
+
+    /** Is animated mode active? */
+    isAnimated(): boolean {
+        return this.animated;
+    }
+
+    /** Pin a node (its position is controlled externally, e.g. by dragging) */
+    pin(nodeId: number): void {
+        this.pinned.add(nodeId);
+        // Zero out velocity for pinned node
+        this.velocities[nodeId * 2] = 0;
+        this.velocities[nodeId * 2 + 1] = 0;
+    }
+
+    /** Unpin a node (rejoin physics simulation) */
+    unpin(nodeId: number): void {
+        this.pinned.delete(nodeId);
     }
 
     /** Run layout synchronously for N steps */
@@ -72,11 +105,13 @@ export class ForceLayout {
     start(): void {
         if (this.running) return;
         this.running = true;
-        this.iteration = 0;
+        if (!this.animated) this.iteration = 0;
 
         // Ensure velocity buffer matches node count
         if (this.velocities.length < this.graph.numNodes * 2) {
+            const old = this.velocities;
             this.velocities = new Float32Array(this.graph.numNodes * 2);
+            this.velocities.set(old.subarray(0, Math.min(old.length, this.velocities.length)));
         }
 
         const loop = () => {
@@ -92,12 +127,15 @@ export class ForceLayout {
 
             this.onTick?.(this.iteration, energy);
 
-            if (
-                energy < this.config.convergenceThreshold ||
-                this.iteration >= this.config.maxIterations
-            ) {
-                this.stop();
-                return;
+            // In animated mode, never auto-stop
+            if (!this.animated) {
+                if (
+                    energy < this.config.convergenceThreshold ||
+                    this.iteration >= this.config.maxIterations
+                ) {
+                    this.stop();
+                    return;
+                }
             }
 
             requestAnimationFrame(loop);
@@ -134,12 +172,14 @@ export class ForceLayout {
         const edges = this.graph.edgeIndices;
         const edgeCount = this.graph.numEdges;
         const sizes = this.graph.sizes;
+        const pinned = this.pinned;
 
         const { repulsion, attraction, gravity, damping } = this.config;
 
         // --- Repulsion (O(n²) brute force) ---
         for (let i = 0; i < n; i++) {
             if (sizes[i] <= 0) continue; // skip deleted
+            if (pinned.has(i)) continue; // pinned: don't accumulate forces
 
             const ix = i * 2;
             const iy = ix + 1;
@@ -187,16 +227,22 @@ export class ForceLayout {
             const fx = (dx / dist) * force;
             const fy = (dy / dist) * force;
 
-            vel[sx] += fx * 0.016;
-            vel[sy] += fy * 0.016;
-            vel[tx] -= fx * 0.016;
-            vel[ty] -= fy * 0.016;
+            // Only apply force to unpinned end(s)
+            if (!pinned.has(src)) {
+                vel[sx] += fx * 0.016;
+                vel[sy] += fy * 0.016;
+            }
+            if (!pinned.has(tgt)) {
+                vel[tx] -= fx * 0.016;
+                vel[ty] -= fy * 0.016;
+            }
         }
 
         // --- Integration + energy measurement ---
         let totalEnergy = 0;
         for (let i = 0; i < n; i++) {
             if (sizes[i] <= 0) continue;
+            if (pinned.has(i)) continue; // pinned: position set externally
 
             const ix = i * 2;
             const iy = ix + 1;
