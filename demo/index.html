@@ -192,6 +192,17 @@
               </div>
             </div>
 
+            <div class="setting-row">
+              <label>Show FPS</label>
+              <div class="toggle-group">
+                <button class="toggle-btn" :class="{ active: settingsModal.showFps }"
+                        @click="onToggleSetting('showFps')">
+                  {{ settingsModal.showFps ? 'On' : 'Off' }}
+                </button>
+              </div>
+            </div>
+          </div>
+
           <div class="settings-section">
             <div class="settings-section-title">Physics</div>
 
