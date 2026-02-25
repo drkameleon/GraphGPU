@@ -33,14 +33,16 @@ export interface ForceLayoutConfig {
 }
 
 const DEFAULTS: ForceLayoutConfig = {
-    gravitationalConstant: -2000,
-    springLength: 95,
-    springConstant: 0.04,
-    centralGravity: 0.3,
+    // Tuned for GraphGPU coordinate space (positions in [-1, 1] range).
+    // vis.js uses pixel coords (~0-1000); these values are scaled accordingly.
+    gravitationalConstant: -0.8,
+    springLength: 0.5,
+    springConstant: 0.08,
+    centralGravity: 0.003,
     damping: 0.09,
     timestep: 0.5,
-    maxVelocity: 50,
-    minVelocity: 0.75,
+    maxVelocity: 0.15,
+    minVelocity: 0.001,
     maxIterations: 1000,
 };
 

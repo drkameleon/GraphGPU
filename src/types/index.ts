@@ -139,27 +139,27 @@ export interface LayoutOptions {
     type: LayoutType;
 
     // ── Repulsion ──
-    /** Gravitational constant (negative = repulsive). vis.js default: -2000 */
+    /** Gravitational constant (negative = repulsive). Default: -0.8 */
     gravitationalConstant?: number;
 
     // ── Springs (edges) ──
-    /** Rest length of edge springs. vis.js default: 95 */
+    /** Rest length of edge springs. Default: 0.5 */
     springLength?: number;
-    /** Spring stiffness. vis.js default: 0.04 */
+    /** Spring stiffness. Default: 0.08 */
     springConstant?: number;
 
     // ── Central gravity ──
-    /** Pull strength toward origin. vis.js default: 0.3 */
+    /** Pull strength toward origin. Default: 0.003 */
     centralGravity?: number;
 
     // ── Integration ──
-    /** Velocity damping coefficient. vis.js default: 0.09 */
+    /** Velocity damping coefficient. Default: 0.09 */
     damping?: number;
-    /** Integration timestep. vis.js default: 0.5 */
+    /** Integration timestep. Default: 0.5 */
     timestep?: number;
-    /** Max velocity clamp. vis.js default: 50 */
+    /** Max velocity clamp. Default: 0.15 */
     maxVelocity?: number;
-    /** Stabilization threshold (max node velocity). vis.js default: 0.75 */
+    /** Stabilization threshold (max node velocity). Default: 0.001 */
     minVelocity?: number;
 
     /** Max iterations before auto-stop */
