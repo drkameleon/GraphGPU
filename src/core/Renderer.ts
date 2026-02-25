@@ -252,13 +252,14 @@ export class Renderer {
                 module: edgeModule,
                 entryPoint: 'vs_edge',
                 buffers: [{
-                    // Per-instance: srcPos(vec2f) + tgtPos(vec2f) + alpha(f32)
-                    arrayStride: 20,
+                    // Per-instance: srcPos(vec2f) + tgtPos(vec2f) + alpha(f32) + color(vec3f)
+                    arrayStride: 32,  // 8 floats × 4 bytes
                     stepMode: 'instance',
                     attributes: [
                         { shaderLocation: 0, offset: 0, format: 'float32x2' },   // srcPos
                         { shaderLocation: 1, offset: 8, format: 'float32x2' },   // tgtPos
                         { shaderLocation: 2, offset: 16, format: 'float32' },    // alpha
+                        { shaderLocation: 3, offset: 20, format: 'float32x3' },  // color RGB
                     ],
                 }],
             },
@@ -333,11 +334,11 @@ export class Renderer {
         const cap = Math.max(capacity, 512);
         this.gpuEdgeVerts?.destroy();
         this.gpuEdgeVerts = this.device.createBuffer({
-            size: cap * 5 * 4, // 5 floats per edge instance (srcXY, tgtXY, alpha)
+            size: cap * 8 * 4, // 8 floats per edge instance (srcXY, tgtXY, alpha, RGB)
             usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
         });
         this.gpuEdgeCapacity = cap;
-        this.edgeVertexData = new Float32Array(cap * 5);
+        this.edgeVertexData = new Float32Array(cap * 8);
     }
 
     private uploadNodeData(): void {
@@ -385,6 +386,7 @@ export class Renderer {
 
         const positions = this.graph.positions;
         const indices = this.graph.edgeIndices;
+        const edgeColors = this.graph.edgeColors;
         let writeIdx = 0;
         let visibleEdges = 0;
 
@@ -394,12 +396,15 @@ export class Renderer {
             if (!this.graph.isNodeActive(src) || !this.graph.isNodeActive(tgt)) continue;
             if (!this.graph.isEdgeActive(i)) continue;
 
-            // Per-instance: srcX, srcY, tgtX, tgtY, alpha
+            // Per-instance: srcX, srcY, tgtX, tgtY, alpha, R, G, B
             this.edgeVertexData[writeIdx++] = positions[src * 2];
             this.edgeVertexData[writeIdx++] = positions[src * 2 + 1];
             this.edgeVertexData[writeIdx++] = positions[tgt * 2];
             this.edgeVertexData[writeIdx++] = positions[tgt * 2 + 1];
             this.edgeVertexData[writeIdx++] = 1.0;
+            this.edgeVertexData[writeIdx++] = edgeColors[i * 3];
+            this.edgeVertexData[writeIdx++] = edgeColors[i * 3 + 1];
+            this.edgeVertexData[writeIdx++] = edgeColors[i * 3 + 2];
             visibleEdges++;
         }
 
@@ -408,7 +413,7 @@ export class Renderer {
         if (visibleEdges > 0) {
             this.device.queue.writeBuffer(
                 this.gpuEdgeVerts, 0,
-                this.edgeVertexData.buffer, 0, visibleEdges * 5 * 4,
+                this.edgeVertexData.buffer, 0, visibleEdges * 8 * 4,
             );
         }
 
@@ -679,6 +684,68 @@ export class Renderer {
 
                 lctx.fillText(disp, sx, sy);
             }
+
+            // ---- Edge labels ----
+            // Render edge tags at the midpoint of each edge, sized by zoom
+            const camZoomGlobal = Math.abs(this.camera.matrix[0]);
+            const edgeFontSize = Math.max(8, Math.min(camZoomGlobal * cw * 0.012, 16));
+
+            // Compute edge visual width in CSS pixels (mirrors shader logic)
+            const minEdgeW = 3.0; // matches shader minWidth in px
+            const zoomEdgeW = 0.004 * camZoomGlobal * cw * 0.5; // matches shader zoomWidth → CSS px
+            const edgeWidthPx = Math.max(minEdgeW, zoomEdgeW);
+
+            // Only render edge labels when zoomed in enough to read them
+            if (edgeFontSize >= 9) {
+                lctx.font = `500 ${edgeFontSize}px -apple-system,"Segoe UI",Helvetica,Arial,sans-serif`;
+                lctx.textAlign = 'center';
+                lctx.textBaseline = 'middle';
+                lctx.fillStyle = 'rgba(160,155,175,0.85)';
+
+                const edgeIndices = this.graph.edgeIndices;
+                const pos = this.graph.positions;
+
+                // Offset: half the rendered edge line width + comfortable gap + half font height
+                const labelOffset = edgeWidthPx * 0.5 + edgeFontSize * 0.55 + 3;
+
+                for (const eid of this.graph.activeEdgeIds()) {
+                    const src = edgeIndices[eid * 2];
+                    const tgt = edgeIndices[eid * 2 + 1];
+                    if (!this.graph.isNodeActive(src) || !this.graph.isNodeActive(tgt)) continue;
+
+                    const edge = this.graph.getEdge(eid);
+                    if (!edge || !edge.tag) continue;
+
+                    // Midpoint in world coords
+                    const mx = (pos[src * 2] + pos[tgt * 2]) * 0.5;
+                    const my = (pos[src * 2 + 1] + pos[tgt * 2 + 1]) * 0.5;
+                    const [sx, sy] = this.worldToCSS(mx, my);
+
+                    // Skip off-screen labels
+                    if (sx < -80 || sx > cw + 80 || sy < -40 || sy > ch + 40) continue;
+
+                    // Compute edge angle for rotated text
+                    const [sx1, sy1] = this.worldToCSS(pos[src * 2], pos[src * 2 + 1]);
+                    const [sx2, sy2] = this.worldToCSS(pos[tgt * 2], pos[tgt * 2 + 1]);
+                    let angle = Math.atan2(sy2 - sy1, sx2 - sx1);
+
+                    // Keep text readable (never upside down)
+                    if (angle > Math.PI / 2) angle -= Math.PI;
+                    if (angle < -Math.PI / 2) angle += Math.PI;
+
+                    // Skip very short edges where label won't fit
+                    const edgeLen = Math.hypot(sx2 - sx1, sy2 - sy1);
+                    if (edgeLen < 40) continue;
+
+                    lctx.save();
+                    lctx.translate(sx, sy);
+                    lctx.rotate(angle);
+                    // Offset above the edge line, accounting for edge visual thickness
+                    lctx.fillText(edge.tag, 0, -labelOffset);
+                    lctx.restore();
+                }
+            }
+
             lctx.restore();
         }
     }

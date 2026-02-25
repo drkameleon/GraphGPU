@@ -129,6 +129,7 @@ struct VSOut {
   @builtin(position) position: vec4f,
   @location(0) alpha: f32,
   @location(1) vEdge: f32,
+  @location(2) color: vec3f,
 };
 
 fn applyCamera(pos: vec2f) -> vec2f {
@@ -151,6 +152,7 @@ fn vs_edge(
   @location(0) srcPos: vec2f,
   @location(1) tgtPos: vec2f,
   @location(2) alpha: f32,
+  @location(3) edgeColor: vec3f,
 ) -> VSOut {
   let t = ET[vi];
   let s = ES[vi];
@@ -166,6 +168,7 @@ fn vs_edge(
     out.position = vec4f(srcProj, 0.0, 1.0);
     out.alpha = 0.0;
     out.vEdge = 0.0;
+    out.color = edgeColor;
     return out;
   }
 
@@ -182,6 +185,7 @@ fn vs_edge(
   out.position = vec4f(pos, 0.0, 1.0);
   out.alpha = alpha * frame.edgeOpacity;
   out.vEdge = s;  // raw -1 to +1, interpolated across quad face
+  out.color = edgeColor;
   return out;
 }
 
@@ -190,7 +194,7 @@ fn fs_edge(in: VSOut) -> @location(0) vec4f {
   let d = abs(in.vEdge);  // 0 at center of edge, 1 at border
   let aa = fwidth(d);
   let edgeFade = smoothstep(1.0, 1.0 - aa * 3.0, d);
-  return vec4f(0.55, 0.53, 0.68, in.alpha * edgeFade);
+  return vec4f(in.color, in.alpha * edgeFade);
 }
 `;
 

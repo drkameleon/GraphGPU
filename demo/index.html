@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>graphGPU.js — Demo</title>
+  <title>GraphGPU — Demo</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
@@ -125,7 +125,9 @@
       bottom: 24px; left: 28px;
       z-index: 10;
       display: flex;
-      gap: 16px;
+      flex-wrap: wrap;
+      gap: 8px 16px;
+      max-width: calc(100vw - 450px); /* leave room for controls on the right */
       pointer-events: none;
     }
 
@@ -283,8 +285,8 @@
   <canvas id="graph-canvas"></canvas>
 
   <div class="header">
-    <h1><span class="dot"></span> graphGPU.js</h1>
-    <div class="subtitle">sample11 — cinema graph</div>
+    <h1><span class="dot"></span> GraphGPU</h1>
+    <div class="subtitle">Demo graph</div>
   </div>
 
   <div class="stats" id="stats">
