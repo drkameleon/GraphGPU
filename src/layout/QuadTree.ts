@@ -228,7 +228,7 @@ export class QuadTree {
         return idx;
     }
 
-    private insert(nodeIdx: number, bodyId: number, bx: number, by: number): void {
+    private insert(nodeIdx: number, bodyId: number, bx: number, by: number, depth: number = 0): void {
         const base = nodeIdx * NODE_SIZE;
         const existingBody = this.pool[base + BODY_ID];
         const hasChildren =
@@ -244,6 +244,13 @@ export class QuadTree {
             return;
         }
 
+        // Max depth guard: if two bodies share (nearly) the same position,
+        // stop subdividing and accumulate mass into this node.
+        if (depth >= 40) {
+            this.pool[base + MASS] += 1;
+            return;
+        }
+
         // Case 2: Leaf with existing body — subdivide
         if (existingBody >= 0) {
             const oldId = existingBody;
@@ -255,11 +262,11 @@ export class QuadTree {
             this.pool[base + MASS] = 0;
 
             // Re-insert the old body
-            this.insertIntoChild(nodeIdx, oldId, oldX, oldY);
+            this.insertIntoChild(nodeIdx, oldId, oldX, oldY, depth);
         }
 
         // Case 3: Internal node — insert into correct child
-        this.insertIntoChild(nodeIdx, bodyId, bx, by);
+        this.insertIntoChild(nodeIdx, bodyId, bx, by, depth);
     }
 
     private insertIntoChild(
@@ -267,6 +274,7 @@ export class QuadTree {
         bodyId: number,
         bx: number,
         by: number,
+        depth: number = 0,
     ): void {
         const base = parentIdx * NODE_SIZE;
         const cx = this.pool[base + CX];
@@ -305,7 +313,7 @@ export class QuadTree {
             this.pool[base + quadrant] = childIdx;
         }
 
-        this.insert(childIdx, bodyId, bx, by);
+        this.insert(childIdx, bodyId, bx, by, depth + 1);
     }
 
     /**

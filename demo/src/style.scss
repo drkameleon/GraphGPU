@@ -679,6 +679,35 @@ body {
 }
 
 // ============================================================
+// FPS Overlay
+// ============================================================
+
+.fps-overlay {
+  position: fixed;
+  top: calc(#{$toolbar-h} + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 15;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: $radius;
+  padding: 6px 14px;
+  box-shadow: var(--shadow);
+  font-family: $font-mono;
+  font-size: 11px;
+  color: var(--text-dim);
+  display: flex;
+  gap: 12px;
+  pointer-events: none;
+
+  b {
+    color: var(--accent);
+    font-weight: 600;
+    font-size: 13px;
+  }
+}
+
+// ============================================================
 // Fallback
 // ============================================================
 

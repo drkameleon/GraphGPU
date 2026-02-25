@@ -587,6 +587,11 @@ export class Renderer {
         this.labelsVisible = visible;
     }
 
+    /** Get current FPS */
+    getFps(): number {
+        return this.currentFps;
+    }
+
     /** Set selection state for a node (1.0 = selected, 0.0 = not) */
     setSelection(nodeId: number, selected: boolean): void {
         if (this.selectionData.length <= nodeId) {
@@ -699,84 +704,87 @@ export class Renderer {
 
                 const edgeIndices = this.graph.edgeIndices;
                 const pos = this.graph.positions;
+                const numEdges = this.graph.numEdges;
 
-                for (const eid of this.graph.activeEdgeIds()) {
-                    const src = edgeIndices[eid * 2];
-                    const tgt = edgeIndices[eid * 2 + 1];
-                    if (!this.graph.isNodeActive(src) || !this.graph.isNodeActive(tgt)) continue;
+                // Skip edge labels for large graphs — they'd be unreadable clutter
+                // and the overlap check + text rendering is expensive
+                if (numEdges <= 300) {
+                    for (const eid of this.graph.activeEdgeIds()) {
+                        const src = edgeIndices[eid * 2];
+                        const tgt = edgeIndices[eid * 2 + 1];
+                        if (!this.graph.isNodeActive(src) || !this.graph.isNodeActive(tgt)) continue;
 
-                    const edge = this.graph.getEdge(eid);
-                    if (!edge || !edge.tag) continue;
+                        const edge = this.graph.getEdge(eid);
+                        if (!edge || !edge.tag) continue;
 
-                    // Use the average screen radius of src and tgt nodes.
-                    // This is the CORRECT nodeScreenR (includes sizes[id] * nodeScale).
-                    const srcR = nodeScreenData[src]?.r ?? 0;
-                    const tgtR = nodeScreenData[tgt]?.r ?? 0;
-                    const avgNodeR = (srcR + tgtR) * 0.5;
+                        // Use the average screen radius of src and tgt nodes.
+                        const srcR = nodeScreenData[src]?.r ?? 0;
+                        const tgtR = nodeScreenData[tgt]?.r ?? 0;
+                        const avgNodeR = (srcR + tgtR) * 0.5;
 
-                    // Edge font = 65% of what the node label would be WITHOUT the 22px cap.
-                    // No cap on edge labels — they scale with zoom just like everything else.
-                    const edgeFontSize = Math.max(7, avgNodeR * 0.28 * 0.65);
+                        // Edge font = 65% of what the node label would be WITHOUT the 22px cap.
+                        const edgeFontSize = Math.max(7, avgNodeR * 0.28 * 0.65);
 
-                    lctx.font = `500 ${edgeFontSize}px -apple-system,"Segoe UI",Helvetica,Arial,sans-serif`;
-                    lctx.fillStyle = 'rgba(160,155,175,0.85)';
+                        lctx.font = `500 ${edgeFontSize}px -apple-system,"Segoe UI",Helvetica,Arial,sans-serif`;
+                        lctx.fillStyle = 'rgba(160,155,175,0.85)';
 
-                    const labelOffset = edgeWidthPx * 0.5 + edgeFontSize * 0.55 + 3;
+                        const labelOffset = edgeWidthPx * 0.5 + edgeFontSize * 0.55 + 3;
 
-                    // Midpoint in world coords
-                    const mx = (pos[src * 2] + pos[tgt * 2]) * 0.5;
-                    const my = (pos[src * 2 + 1] + pos[tgt * 2 + 1]) * 0.5;
-                    const [sx, sy] = this.worldToCSS(mx, my);
+                        // Midpoint in world coords
+                        const mx = (pos[src * 2] + pos[tgt * 2]) * 0.5;
+                        const my = (pos[src * 2 + 1] + pos[tgt * 2 + 1]) * 0.5;
+                        const [sx, sy] = this.worldToCSS(mx, my);
 
-                    if (sx < -80 || sx > cw + 80 || sy < -40 || sy > ch + 40) continue;
+                        if (sx < -80 || sx > cw + 80 || sy < -40 || sy > ch + 40) continue;
 
-                    // Compute edge angle for rotated text
-                    const [sx1, sy1] = this.worldToCSS(pos[src * 2], pos[src * 2 + 1]);
-                    const [sx2, sy2] = this.worldToCSS(pos[tgt * 2], pos[tgt * 2 + 1]);
-                    let angle = Math.atan2(sy2 - sy1, sx2 - sx1);
+                        // Compute edge angle for rotated text
+                        const [sx1, sy1] = this.worldToCSS(pos[src * 2], pos[src * 2 + 1]);
+                        const [sx2, sy2] = this.worldToCSS(pos[tgt * 2], pos[tgt * 2 + 1]);
+                        let angle = Math.atan2(sy2 - sy1, sx2 - sx1);
 
-                    if (angle > Math.PI / 2) angle -= Math.PI;
-                    if (angle < -Math.PI / 2) angle += Math.PI;
+                        if (angle > Math.PI / 2) angle -= Math.PI;
+                        if (angle < -Math.PI / 2) angle += Math.PI;
 
-                    const edgeLen = Math.hypot(sx2 - sx1, sy2 - sy1);
-                    if (edgeLen < 40) continue;
+                        const edgeLen = Math.hypot(sx2 - sx1, sy2 - sy1);
+                        if (edgeLen < 40) continue;
 
-                    // Skip if any part of the label overlaps any node circle.
-                    // Test the label's bounding box corners (rotated) against node circles.
-                    const textW = lctx.measureText(edge.tag).width * 0.5 + 4;
-                    const textH = edgeFontSize * 0.6 + 4;
-                    // Four corners of the label bbox relative to (sx, sy), rotated by angle
-                    const cosA = Math.cos(angle);
-                    const sinA = Math.sin(angle);
-                    const offY = -labelOffset;
-                    const corners = [
-                        { x: sx + cosA * (-textW) - sinA * (offY - textH), y: sy + sinA * (-textW) + cosA * (offY - textH) },
-                        { x: sx + cosA * ( textW) - sinA * (offY - textH), y: sy + sinA * ( textW) + cosA * (offY - textH) },
-                        { x: sx + cosA * ( textW) - sinA * (offY + textH), y: sy + sinA * ( textW) + cosA * (offY + textH) },
-                        { x: sx + cosA * (-textW) - sinA * (offY + textH), y: sy + sinA * (-textW) + cosA * (offY + textH) },
-                    ];
-                    let overlapsNode = false;
-                    for (const nid of this.graph.activeNodeIds()) {
-                        const nd = nodeScreenData[nid];
-                        if (!nd) continue;
-                        const rSq = nd.r * nd.r;
-                        for (const c of corners) {
-                            const dx = c.x - nd.sx;
-                            const dy = c.y - nd.sy;
-                            if (dx * dx + dy * dy < rSq) {
-                                overlapsNode = true;
-                                break;
+                        // Check overlap against src and tgt nodes only (O(1) per edge)
+                        const textW = lctx.measureText(edge.tag).width * 0.5 + 4;
+                        const textH = edgeFontSize * 0.6 + 4;
+                        const cosA = Math.cos(angle);
+                        const sinA = Math.sin(angle);
+                        const offY = -labelOffset;
+                        const corners = [
+                            { x: sx + cosA * (-textW) - sinA * (offY - textH), y: sy + sinA * (-textW) + cosA * (offY - textH) },
+                            { x: sx + cosA * ( textW) - sinA * (offY - textH), y: sy + sinA * ( textW) + cosA * (offY - textH) },
+                            { x: sx + cosA * ( textW) - sinA * (offY + textH), y: sy + sinA * ( textW) + cosA * (offY + textH) },
+                            { x: sx + cosA * (-textW) - sinA * (offY + textH), y: sy + sinA * (-textW) + cosA * (offY + textH) },
+                        ];
+                        let overlapsNode = false;
+                        // Only check the two connected nodes — they're the only
+                        // ones whose circles can realistically overlap the midpoint label
+                        for (const nid of [src, tgt]) {
+                            const nd = nodeScreenData[nid];
+                            if (!nd) continue;
+                            const rSq = nd.r * nd.r;
+                            for (const c of corners) {
+                                const dx = c.x - nd.sx;
+                                const dy = c.y - nd.sy;
+                                if (dx * dx + dy * dy < rSq) {
+                                    overlapsNode = true;
+                                    break;
+                                }
                             }
+                            if (overlapsNode) break;
                         }
-                        if (overlapsNode) break;
-                    }
-                    if (overlapsNode) continue;
+                        if (overlapsNode) continue;
 
-                    lctx.save();
-                    lctx.translate(sx, sy);
-                    lctx.rotate(angle);
-                    lctx.fillText(edge.tag, 0, -labelOffset);
-                    lctx.restore();
+                        lctx.save();
+                        lctx.translate(sx, sy);
+                        lctx.rotate(angle);
+                        lctx.fillText(edge.tag, 0, -labelOffset);
+                        lctx.restore();
+                    }
                 }
             }
 

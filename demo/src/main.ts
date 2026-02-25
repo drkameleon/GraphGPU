@@ -31,6 +31,7 @@ interface SettingsModalState {
     nodeSize: number;
     edgeOpacity: number;
     showLabels: boolean;
+    showFps: boolean;
     gravitationalConstant: number;
     springLength: number;
     springConstant: number;
@@ -52,6 +53,7 @@ const DEFAULT_SETTINGS: Omit<SettingsModalState, 'open'> = {
     nodeSize: 8,
     edgeOpacity: 0.8,
     showLabels: true,
+    showFps: false,
     gravitationalConstant: -0.25,
     springLength: 0.2,
     springConstant: 0.06,
@@ -113,6 +115,10 @@ createApp({
         // Legend
         const legendItems = ref<LegendItem[]>([]);
         const tagColorCache: Record<string, string> = {};
+
+        // FPS display
+        const fpsDisplay = reactive({ fps: 0, nodes: 0, edges: 0 });
+        let fpsInterval: number | null = null;
 
         // Computed
         const hasSelection = computed(() => selectedNode.value !== null);
@@ -279,6 +285,19 @@ createApp({
             if (key === 'showLabels') {
                 settingsModal.showLabels = !settingsModal.showLabels;
                 g?.setLabelsVisible(settingsModal.showLabels);
+            } else if (key === 'showFps') {
+                settingsModal.showFps = !settingsModal.showFps;
+                if (settingsModal.showFps) {
+                    fpsInterval = window.setInterval(() => {
+                        if (!g) return;
+                        fpsDisplay.fps = g.getFps();
+                        fpsDisplay.nodes = g.nodeCount;
+                        fpsDisplay.edges = g.edgeCount;
+                    }, 250);
+                } else if (fpsInterval !== null) {
+                    clearInterval(fpsInterval);
+                    fpsInterval = null;
+                }
             }
         }
 
@@ -288,9 +307,83 @@ createApp({
             g.setNodeSize(DEFAULT_SETTINGS.nodeSize);
             g.setEdgeOpacity(DEFAULT_SETTINGS.edgeOpacity);
             g.setLabelsVisible(DEFAULT_SETTINGS.showLabels);
+            if (fpsInterval !== null) {
+                clearInterval(fpsInterval);
+                fpsInterval = null;
+            }
             if (layoutRunning.value) {
                 g.stopLayout();
                 g.startLayout(getPhysicsOpts());
+            }
+        }
+
+        // ── Stress Test ──
+
+        function stressTest(): void {
+            if (!g) return;
+
+            // Stop current layout
+            if (layoutRunning.value) g.stopLayout();
+
+            // Clear existing graph
+            const graph = g.getGraph();
+            for (const id of [...graph.activeNodeIds()]) {
+                g.unput(id);
+            }
+
+            // Use smaller nodes for stress test
+            g.setNodeSize(4);
+            settingsModal.nodeSize = 4;
+
+            // Generate random graph: 500 nodes, ~1500 edges
+            const N = 500;
+            const tags = ['alpha', 'beta', 'gamma', 'delta', 'epsilon'];
+            const edgeTags = ['connects', 'links', 'references', 'depends'];
+            const nodeIds: number[] = [];
+
+            for (let i = 0; i < N; i++) {
+                const tag = tags[Math.floor(Math.random() * tags.length)];
+                const id = g.put(tag, { name: `${tag}-${i}` });
+                nodeIds.push(id);
+            }
+
+            // Each node gets ~3 random edges on average
+            const numEdges = Math.floor(N * 3);
+            for (let i = 0; i < numEdges; i++) {
+                const src = nodeIds[Math.floor(Math.random() * N)];
+                let tgt = nodeIds[Math.floor(Math.random() * N)];
+                if (src === tgt) tgt = nodeIds[(nodeIds.indexOf(src) + 1) % N];
+                const tag = edgeTags[Math.floor(Math.random() * edgeTags.length)];
+                g.link(src, tag, tgt);
+            }
+
+            // Scatter positions randomly before layout
+            g.resetPositions();
+
+            // Light pre-stabilization (don't block for too long)
+            for (let i = 0; i < 50; i++) {
+                g.stepLayout(3);
+            }
+            g.fitView(0.15);
+
+            // Start layout and let it settle live
+            g.startLayout(getPhysicsOpts());
+            layoutRunning.value = true;
+            setTimeout(() => g!.fitView(0.15), 500);
+            setTimeout(() => g!.fitView(0.15), 2000);
+
+            updateCounts();
+            refreshLegend();
+
+            // Auto-enable FPS display
+            if (!settingsModal.showFps) {
+                settingsModal.showFps = true;
+                fpsInterval = window.setInterval(() => {
+                    if (!g) return;
+                    fpsDisplay.fps = g.getFps();
+                    fpsDisplay.nodes = g.nodeCount;
+                    fpsDisplay.edges = g.edgeCount;
+                }, 250);
             }
         }
 
@@ -390,7 +483,7 @@ createApp({
 
         return {
             darkMode, layoutRunning, animatedEnabled, activePalette,
-            nodeCount, edgeCount,
+            nodeCount, edgeCount, fpsDisplay,
             selectedNode, selectedNodeColor, hoveredNode, hoveredNodeColor,
             hasSelection,
             tooltipVisible, tooltipStyle, tooltipTag, tooltipName, tooltipProps, tooltipColor,
@@ -399,7 +492,7 @@ createApp({
             toggleLayout, fitView, resetGraph, toggleAnimated, toggleDarkMode,
             switchPalette, getPalettePreview,
             showEditModal, saveEdit, deleteSelected, confirmDelete,
-            onSettingChange, onToggleSetting, resetSettings,
+            onSettingChange, onToggleSetting, resetSettings, stressTest,
         };
     },
 }).mount('#app');
