@@ -269,11 +269,19 @@ export class GraphGPU {
      * Start force-directed layout.
      */
     startLayout(opts?: {
+        gravitationalConstant?: number;
+        springLength?: number;
+        springConstant?: number;
+        centralGravity?: number;
+        damping?: number;
+        timestep?: number;
+        maxVelocity?: number;
+        minVelocity?: number;
+        maxIterations?: number;
+        // Legacy compat
         repulsion?: number;
         attraction?: number;
         gravity?: number;
-        damping?: number;
-        maxIterations?: number;
     }): void {
         this.layout = new ForceLayout(this.graph, {
             type: 'force',
