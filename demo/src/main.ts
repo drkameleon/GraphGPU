@@ -362,7 +362,7 @@ async function main() {
     }
 
     window.addEventListener('resize', () => {
-        g.getGraph(); // force re-render
+        g.resize(); // update canvas size, MSAA, and camera aspect
     });
 
     // -----------------------------------------------------------
