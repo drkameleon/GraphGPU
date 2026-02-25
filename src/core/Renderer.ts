@@ -566,6 +566,16 @@ export class Renderer {
         this.backgroundColor = color;
     }
 
+    /** Change node scale at runtime */
+    setNodeScale(scale: number): void {
+        this.nodeScale = scale;
+    }
+
+    /** Change edge opacity at runtime */
+    setEdgeOpacity(opacity: number): void {
+        this.edgeOpacity = opacity;
+    }
+
     /** Set selection state for a node (1.0 = selected, 0.0 = not) */
     setSelection(nodeId: number, selected: boolean): void {
         if (this.selectionData.length <= nodeId) {
@@ -689,7 +699,7 @@ export class Renderer {
             // ---- Edge labels ----
             // Render edge tags at the midpoint of each edge, sized by zoom
             const camZoomGlobal = Math.abs(this.camera.matrix[0]);
-            const edgeFontSize = Math.max(8, Math.min(camZoomGlobal * cw * 0.012, 16));
+            const edgeFontSize = Math.max(9, Math.min(camZoomGlobal * cw * 0.028, 22));
 
             // Compute edge visual width in CSS pixels (mirrors shader logic)
             // Edge width matches shader: 15% of projected node radius
@@ -698,7 +708,7 @@ export class Renderer {
             const edgeWidthPx = Math.max(2.5, projectedNodeR * 1.0);
 
             // Only render edge labels when zoomed in enough to read them
-            if (edgeFontSize >= 9) {
+            if (edgeFontSize >= 9.5) {
                 lctx.font = `500 ${edgeFontSize}px -apple-system,"Segoe UI",Helvetica,Arial,sans-serif`;
                 lctx.textAlign = 'center';
                 lctx.textBaseline = 'middle';
