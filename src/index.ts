@@ -420,6 +420,17 @@ export class GraphGPU {
                 this.graph.setNodeColor(id, color.bg);
             }
         }
+        // Re-color all existing edges
+        for (const id of this.graph.activeEdgeIds()) {
+            const edge = this.graph.getEdge(id);
+            if (edge?.tag) {
+                const color = this.graph.tagColors.getColor(edge.tag);
+                this.graph.edgeColors[id * 3] = color.bg[0];
+                this.graph.edgeColors[id * 3 + 1] = color.bg[1];
+                this.graph.edgeColors[id * 3 + 2] = color.bg[2];
+            }
+        }
+        this.graph.dirtyEdges = true;
     }
 
     /**
