@@ -50,6 +50,7 @@ export class Graph {
     // --- Edge SoA buffers ---
     edgeIndices: Uint32Array;  // [src0, tgt0, src1, tgt1, ...]
     edgeWeights: Float32Array; // [w0, w1, ...]
+    edgeColors: Float32Array;  // [r0, g0, b0, r1, g1, b1, ...]  per-edge RGB
 
     // --- Edge metadata ---
     private edgeTags: string[];
@@ -95,6 +96,7 @@ export class Graph {
         // Allocate edge buffers
         this.edgeIndices = new Uint32Array(this.edgeCapacity * 2);
         this.edgeWeights = new Float32Array(this.edgeCapacity);
+        this.edgeColors = new Float32Array(this.edgeCapacity * 3);
         this.edgeTags = new Array(this.edgeCapacity);
         this.edgeProperties = new Array(this.edgeCapacity);
 
@@ -280,6 +282,19 @@ export class Graph {
 
         this.edgeTags[id] = input.tag;
         this.edgeProperties[id] = input.properties ?? {};
+
+        // Assign edge color from palette based on tag
+        if (input.tag) {
+            const tagColor = this.tagColors.getColor(input.tag);
+            this.edgeColors[id * 3] = tagColor.bg[0];
+            this.edgeColors[id * 3 + 1] = tagColor.bg[1];
+            this.edgeColors[id * 3 + 2] = tagColor.bg[2];
+        } else {
+            // Default gray for untagged edges
+            this.edgeColors[id * 3] = 0.55;
+            this.edgeColors[id * 3 + 1] = 0.53;
+            this.edgeColors[id * 3 + 2] = 0.68;
+        }
 
         // Update adjacency index
         this.adjAdd(input.source, id);
@@ -492,6 +507,7 @@ export class Graph {
         const newCapacity = this.edgeCapacity * GROWTH_FACTOR;
         this.edgeIndices = growBuffer(this.edgeIndices, newCapacity * 2);
         this.edgeWeights = growBuffer(this.edgeWeights, newCapacity);
+        this.edgeColors = growBuffer(this.edgeColors, newCapacity * 3);
         this.edgeTags.length = newCapacity;
         this.edgeProperties.length = newCapacity;
         this.edgeCapacity = newCapacity;
