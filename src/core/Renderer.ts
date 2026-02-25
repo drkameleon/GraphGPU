@@ -741,12 +741,6 @@ export class Renderer {
                     const edgeLen = Math.hypot(sx2 - sx1, sy2 - sy1);
                     if (edgeLen < 40) continue;
 
-                    // Compute the actual label position (offset perpendicular to edge)
-                    const perpX = -Math.sin(angle) * labelOffset;
-                    const perpY = Math.cos(angle) * labelOffset;
-                    const labelX = sx + perpX;
-                    const labelY = sy - Math.abs(perpY);
-
                     // Skip if any part of the label overlaps any node circle.
                     // Test the label's bounding box corners (rotated) against node circles.
                     const textW = lctx.measureText(edge.tag).width * 0.5 + 4;
