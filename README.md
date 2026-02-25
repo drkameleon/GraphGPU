@@ -101,7 +101,8 @@ new GraphGPU({
 
 | Method | Description |
 |--------|-------------|
-| `put(tag, label, properties?)` | Add a node |
+| `put(tag, label, properties?)` | Add a node with a label string |
+| `put(tag, properties?)` | Add a node with properties dict |
 | `link(source, tag, target)` | Add an edge (supports arrays for batch) |
 | `unput(nodeId)` | Remove a node |
 | `unlink(edgeId)` | Remove an edge |
@@ -114,6 +115,7 @@ new GraphGPU({
 | `stopLayout()` | Stop the layout |
 | `startGPULayout(opts?)` | Start GPU compute layout |
 | `fitView(padding?)` | Fit camera to show all nodes |
+| `resize()` | Handle container/window resize (updates canvas, MSAA, camera) |
 
 #### Appearance
 
