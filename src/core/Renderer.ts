@@ -672,23 +672,22 @@ export class Renderer {
             const projectedNodeR = baseNodeWorldSize * camZoomGlobal * cw * 0.5;
             const edgeWidthPx = Math.max(2.5, projectedNodeR * 1.0);
 
-            // Edge labels are always 65% of the node label font size.
-            // Node labels: max(7, min(nodeScreenR * 0.28, 22)), visible when nodeScreenR >= 16.
-            // Use projectedNodeR (base node size) as the reference.
-            const nodeRefFontSize = Math.max(7, Math.min(projectedNodeR * 0.28, 22));
-            const edgeFontSize = Math.max(7, nodeRefFontSize * 0.65);
+            // Only show edge labels when node labels are visible.
+            // Node labels appear when nodeScreenR >= 16. Check any active node.
+            let anyNodeLabelVisible = false;
+            for (const id of this.graph.activeNodeIds()) {
+                if (nodeScreenData[id] && nodeScreenData[id].r >= 16) {
+                    anyNodeLabelVisible = true;
+                    break;
+                }
+            }
 
-            // Only show edge labels when node labels are visible (projectedNodeR >= 16)
-            if (projectedNodeR >= 16) {
-                lctx.font = `500 ${edgeFontSize}px -apple-system,"Segoe UI",Helvetica,Arial,sans-serif`;
+            if (anyNodeLabelVisible) {
                 lctx.textAlign = 'center';
                 lctx.textBaseline = 'middle';
-                lctx.fillStyle = 'rgba(160,155,175,0.85)';
 
                 const edgeIndices = this.graph.edgeIndices;
                 const pos = this.graph.positions;
-
-                const labelOffset = edgeWidthPx * 0.5 + edgeFontSize * 0.55 + 3;
 
                 for (const eid of this.graph.activeEdgeIds()) {
                     const src = edgeIndices[eid * 2];
@@ -697,6 +696,21 @@ export class Renderer {
 
                     const edge = this.graph.getEdge(eid);
                     if (!edge || !edge.tag) continue;
+
+                    // Use the average screen radius of src and tgt nodes.
+                    // This is the CORRECT nodeScreenR (includes sizes[id] * nodeScale).
+                    const srcR = nodeScreenData[src]?.r ?? 0;
+                    const tgtR = nodeScreenData[tgt]?.r ?? 0;
+                    const avgNodeR = (srcR + tgtR) * 0.5;
+
+                    // Edge font = 65% of what the node label would be WITHOUT the 22px cap.
+                    // No cap on edge labels — they scale with zoom just like everything else.
+                    const edgeFontSize = Math.max(7, avgNodeR * 0.28 * 0.65);
+
+                    lctx.font = `500 ${edgeFontSize}px -apple-system,"Segoe UI",Helvetica,Arial,sans-serif`;
+                    lctx.fillStyle = 'rgba(160,155,175,0.85)';
+
+                    const labelOffset = edgeWidthPx * 0.5 + edgeFontSize * 0.55 + 3;
 
                     // Midpoint in world coords
                     const mx = (pos[src * 2] + pos[tgt * 2]) * 0.5;
