@@ -331,6 +331,10 @@ createApp({
                 g.unput(id);
             }
 
+            // Use smaller nodes for stress test
+            g.setNodeSize(4);
+            settingsModal.nodeSize = 4;
+
             // Generate random graph: 500 nodes, ~1500 edges
             const N = 500;
             const tags = ['alpha', 'beta', 'gamma', 'delta', 'epsilon'];
@@ -344,8 +348,8 @@ createApp({
             }
 
             // Each node gets ~3 random edges on average
-            const edgeCount = Math.floor(N * 3);
-            for (let i = 0; i < edgeCount; i++) {
+            const numEdges = Math.floor(N * 3);
+            for (let i = 0; i < numEdges; i++) {
                 const src = nodeIds[Math.floor(Math.random() * N)];
                 let tgt = nodeIds[Math.floor(Math.random() * N)];
                 if (src === tgt) tgt = nodeIds[(nodeIds.indexOf(src) + 1) % N];
@@ -353,16 +357,20 @@ createApp({
                 g.link(src, tag, tgt);
             }
 
-            // Pre-stabilize
-            for (let i = 0; i < 200; i++) {
+            // Scatter positions randomly before layout
+            g.resetPositions();
+
+            // Light pre-stabilization (don't block for too long)
+            for (let i = 0; i < 50; i++) {
                 g.stepLayout(3);
             }
             g.fitView(0.15);
 
-            // Start layout
+            // Start layout and let it settle live
             g.startLayout(getPhysicsOpts());
             layoutRunning.value = true;
-            setTimeout(() => g!.fitView(0.15), 800);
+            setTimeout(() => g!.fitView(0.15), 500);
+            setTimeout(() => g!.fitView(0.15), 2000);
 
             updateCounts();
             refreshLegend();
