@@ -1,5 +1,5 @@
 // ============================================================
-// graphGPU Demo — Vue 3 + TypeScript
+// GraphGPU Demo — Vue 3 + TypeScript
 // ============================================================
 
 import { GraphGPU } from 'graphgpu';
@@ -61,7 +61,7 @@ createApp({
         // State
         const darkMode = ref(false);
         const layoutRunning = ref(true);
-        const gravityEnabled = ref(false);
+        const animatedEnabled = ref(false);
         const activePalette = ref('vibrant');
         const nodeCount = ref(0);
         const edgeCount = ref(0);
@@ -151,9 +151,9 @@ createApp({
             setTimeout(() => g!.fitView(0.15), 1500);
         }
 
-        function toggleGravity(): void {
-            gravityEnabled.value = !gravityEnabled.value;
-            g?.setGravityPull(gravityEnabled.value, 0.15);
+        function toggleAnimated(): void {
+            animatedEnabled.value = !animatedEnabled.value;
+            g?.setAnimated(animatedEnabled.value);
         }
 
         // ── Theme ──
@@ -295,14 +295,14 @@ createApp({
         });
 
         return {
-            darkMode, layoutRunning, gravityEnabled, activePalette,
+            darkMode, layoutRunning, animatedEnabled, activePalette,
             nodeCount, edgeCount,
             selectedNode, selectedNodeColor, hoveredNode, hoveredNodeColor,
             hasSelection,
             tooltipVisible, tooltipStyle, tooltipTag, tooltipName, tooltipProps, tooltipColor,
             legendItems, paletteNames,
             editModal, deleteModal,
-            toggleLayout, fitView, resetGraph, toggleGravity, toggleDarkMode,
+            toggleLayout, fitView, resetGraph, toggleAnimated, toggleDarkMode,
             switchPalette, getPalettePreview,
             showEditModal, saveEdit, deleteSelected, confirmDelete,
         };
