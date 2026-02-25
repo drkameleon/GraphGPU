@@ -23,8 +23,8 @@
       <button class="btn" @click="fitView"><i class="ph-arrows-out-bold"></i> fit</button>
       <button class="btn" @click="resetGraph"><i class="ph-arrow-counter-clockwise-bold"></i> reset</button>
       <div class="sep"></div>
-      <button class="btn" :class="{ active: gravityEnabled }" @click="toggleGravity">
-        <i class="ph-magnet-bold"></i> pull
+      <button class="btn" :class="{ active: animatedEnabled }" @click="toggleAnimated">
+        <i class="ph-atom-bold"></i> animated
       </button>
       <div class="sep"></div>
       <button class="btn" @click="toggleDarkMode">
