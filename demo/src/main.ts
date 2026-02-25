@@ -1,5 +1,5 @@
 // ============================================================
-// graphGPU Demo — Vue 3 + TypeScript
+// GraphGPU Demo — Vue 3 + TypeScript
 // ============================================================
 
 import { GraphGPU } from 'graphgpu';
