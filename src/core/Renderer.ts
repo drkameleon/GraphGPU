@@ -679,6 +679,60 @@ export class Renderer {
 
                 lctx.fillText(disp, sx, sy);
             }
+
+            // ---- Edge labels ----
+            // Render edge tags at the midpoint of each edge, sized by zoom
+            const camZoomGlobal = Math.abs(this.camera.matrix[0]);
+            const edgeFontSize = Math.max(7, Math.min(camZoomGlobal * cw * 0.008, 13));
+
+            // Only render edge labels when zoomed in enough to read them
+            if (edgeFontSize >= 8) {
+                lctx.font = `500 ${edgeFontSize}px -apple-system,"Segoe UI",Helvetica,Arial,sans-serif`;
+                lctx.textAlign = 'center';
+                lctx.textBaseline = 'middle';
+                lctx.fillStyle = 'rgba(160,155,175,0.85)';
+
+                const edgeIndices = this.graph.edgeIndices;
+                const pos = this.graph.positions;
+
+                for (const eid of this.graph.activeEdgeIds()) {
+                    const src = edgeIndices[eid * 2];
+                    const tgt = edgeIndices[eid * 2 + 1];
+                    if (!this.graph.isNodeActive(src) || !this.graph.isNodeActive(tgt)) continue;
+
+                    const edge = this.graph.getEdge(eid);
+                    if (!edge || !edge.tag) continue;
+
+                    // Midpoint in world coords
+                    const mx = (pos[src * 2] + pos[tgt * 2]) * 0.5;
+                    const my = (pos[src * 2 + 1] + pos[tgt * 2 + 1]) * 0.5;
+                    const [sx, sy] = this.worldToCSS(mx, my);
+
+                    // Skip off-screen labels
+                    if (sx < -80 || sx > cw + 80 || sy < -40 || sy > ch + 40) continue;
+
+                    // Compute edge angle for rotated text
+                    const [sx1, sy1] = this.worldToCSS(pos[src * 2], pos[src * 2 + 1]);
+                    const [sx2, sy2] = this.worldToCSS(pos[tgt * 2], pos[tgt * 2 + 1]);
+                    let angle = Math.atan2(sy2 - sy1, sx2 - sx1);
+
+                    // Keep text readable (never upside down)
+                    if (angle > Math.PI / 2) angle -= Math.PI;
+                    if (angle < -Math.PI / 2) angle += Math.PI;
+
+                    // Skip very short edges where label won't fit
+                    const edgeLen = Math.hypot(sx2 - sx1, sy2 - sy1);
+                    if (edgeLen < 30) continue;
+
+                    lctx.save();
+                    lctx.translate(sx, sy);
+                    lctx.rotate(angle);
+                    // Offset slightly above the edge line
+                    lctx.fillText(edge.tag, 0, -edgeFontSize * 0.7);
+                    lctx.restore();
+                }
+            }
+
             lctx.restore();
         }
     }
