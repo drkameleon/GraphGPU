@@ -171,6 +171,16 @@
                 <span class="slider-val">{{ settingsModal.edgeOpacity }}</span>
               </div>
             </div>
+
+            <div class="setting-row">
+              <label>Show labels</label>
+              <div class="toggle-group">
+                <button class="toggle-btn" :class="{ active: settingsModal.showLabels }"
+                        @click="onToggleSetting('showLabels')">
+                  {{ settingsModal.showLabels ? 'On' : 'Off' }}
+                </button>
+              </div>
+            </div>
           </div>
 
           <div class="settings-section">

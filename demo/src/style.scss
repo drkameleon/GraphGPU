@@ -595,7 +595,7 @@ body {
     font-weight: 500;
     color: var(--text-dim);
     white-space: nowrap;
-    min-width: 110px;
+    min-width: 130px;
   }
 }
 
@@ -647,6 +647,35 @@ body {
   color: var(--text-muted);
   min-width: 38px;
   text-align: right;
+}
+
+.toggle-group {
+  flex: 1;
+  display: flex;
+}
+
+.toggle-btn {
+  font-family: $font-sans;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 3px 14px;
+  border-radius: $radius;
+  border: 1px solid var(--border);
+  background: var(--bg-darker);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.12s;
+
+  &:hover {
+    border-color: var(--text-dim);
+    color: var(--text-dim);
+  }
+
+  &.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-color: var(--accent);
+  }
 }
 
 // ============================================================

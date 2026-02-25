@@ -30,6 +30,7 @@ interface SettingsModalState {
     open: boolean;
     nodeSize: number;
     edgeOpacity: number;
+    showLabels: boolean;
     gravitationalConstant: number;
     springLength: number;
     springConstant: number;
@@ -50,6 +51,7 @@ const LAYOUT_OPTS = {
 const DEFAULT_SETTINGS: Omit<SettingsModalState, 'open'> = {
     nodeSize: 8,
     edgeOpacity: 0.8,
+    showLabels: true,
     gravitationalConstant: -0.25,
     springLength: 0.2,
     springConstant: 0.06,
@@ -273,11 +275,19 @@ createApp({
             }
         }
 
+        function onToggleSetting(key: string): void {
+            if (key === 'showLabels') {
+                settingsModal.showLabels = !settingsModal.showLabels;
+                g?.setLabelsVisible(settingsModal.showLabels);
+            }
+        }
+
         function resetSettings(): void {
             Object.assign(settingsModal, DEFAULT_SETTINGS);
             if (!g) return;
             g.setNodeSize(DEFAULT_SETTINGS.nodeSize);
             g.setEdgeOpacity(DEFAULT_SETTINGS.edgeOpacity);
+            g.setLabelsVisible(DEFAULT_SETTINGS.showLabels);
             if (layoutRunning.value) {
                 g.stopLayout();
                 g.startLayout(getPhysicsOpts());
@@ -389,7 +399,7 @@ createApp({
             toggleLayout, fitView, resetGraph, toggleAnimated, toggleDarkMode,
             switchPalette, getPalettePreview,
             showEditModal, saveEdit, deleteSelected, confirmDelete,
-            onSettingChange, resetSettings,
+            onSettingChange, onToggleSetting, resetSettings,
         };
     },
 }).mount('#app');
