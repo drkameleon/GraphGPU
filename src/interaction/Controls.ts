@@ -51,6 +51,14 @@ export class InteractionController {
     private boundWheel: (e: WheelEvent) => void;
     private boundDblClick: (e: MouseEvent) => void;
 
+    // Touch handlers
+    private boundTouchStart: (e: TouchEvent) => void;
+    private boundTouchMove: (e: TouchEvent) => void;
+    private boundTouchEnd: (e: TouchEvent) => void;
+
+    // Pinch-zoom state
+    private lastPinchDist: number = 0;
+
     constructor(
         canvas: HTMLCanvasElement,
         graph: Graph,
@@ -81,6 +89,11 @@ export class InteractionController {
         this.boundWheel = this.onWheel.bind(this);
         this.boundDblClick = this.onDblClick.bind(this);
 
+        // Touch handlers
+        this.boundTouchStart = this.onTouchStart.bind(this);
+        this.boundTouchMove = this.onTouchMove.bind(this);
+        this.boundTouchEnd = this.onTouchEnd.bind(this);
+
         this.attach();
     }
 
@@ -91,7 +104,16 @@ export class InteractionController {
         this.canvas.addEventListener('mouseup', this.boundMouseUp);
         this.canvas.addEventListener('wheel', this.boundWheel, { passive: false });
         this.canvas.addEventListener('dblclick', this.boundDblClick);
+
+        // Touch events
+        this.canvas.addEventListener('touchstart', this.boundTouchStart, { passive: false });
+        this.canvas.addEventListener('touchmove', this.boundTouchMove, { passive: false });
+        this.canvas.addEventListener('touchend', this.boundTouchEnd);
+        this.canvas.addEventListener('touchcancel', this.boundTouchEnd);
+
         this.canvas.style.cursor = 'grab';
+        // Prevent browser's default touch behaviors (scroll, zoom)
+        this.canvas.style.touchAction = 'none';
     }
 
     /** Detach event listeners */
@@ -101,6 +123,11 @@ export class InteractionController {
         this.canvas.removeEventListener('mouseup', this.boundMouseUp);
         this.canvas.removeEventListener('wheel', this.boundWheel);
         this.canvas.removeEventListener('dblclick', this.boundDblClick);
+
+        this.canvas.removeEventListener('touchstart', this.boundTouchStart);
+        this.canvas.removeEventListener('touchmove', this.boundTouchMove);
+        this.canvas.removeEventListener('touchend', this.boundTouchEnd);
+        this.canvas.removeEventListener('touchcancel', this.boundTouchEnd);
     }
 
     /** Register an event handler */
@@ -419,6 +446,157 @@ export class InteractionController {
         };
 
         this.pullAnimId = requestAnimationFrame(tick);
+    }
+
+    // =========================================================
+    // Touch handlers
+    // =========================================================
+
+    private getTouchCanvasCoords(touch: Touch): [number, number] {
+        const rect = this.canvas.getBoundingClientRect();
+        const ratio = window.devicePixelRatio;
+        return [
+            (touch.clientX - rect.left) * ratio,
+            (touch.clientY - rect.top) * ratio,
+        ];
+    }
+
+    private onTouchStart(e: TouchEvent): void {
+        e.preventDefault();
+
+        if (e.touches.length === 2) {
+            // Start pinch-zoom
+            const dx = e.touches[1].clientX - e.touches[0].clientX;
+            const dy = e.touches[1].clientY - e.touches[0].clientY;
+            this.lastPinchDist = Math.hypot(dx, dy);
+            // Cancel any active single-finger drag
+            this.drag.active = false;
+            this.drag.nodeId = null;
+            return;
+        }
+
+        if (e.touches.length !== 1) return;
+
+        const [sx, sy] = this.getTouchCanvasCoords(e.touches[0]);
+        const hitNode = this.opts.dragNodes ? this.hitTest(sx, sy) : null;
+
+        this.drag.active = true;
+        this.drag.startX = sx;
+        this.drag.startY = sy;
+        this.drag.lastX = sx;
+        this.drag.lastY = sy;
+        this.drag.moved = false;
+
+        if (hitNode !== null) {
+            this.drag.nodeId = hitNode;
+            this.drag.isPan = false;
+        } else {
+            this.drag.nodeId = null;
+            this.drag.isPan = true;
+        }
+    }
+
+    private onTouchMove(e: TouchEvent): void {
+        e.preventDefault();
+
+        if (e.touches.length === 2 && this.opts.zoom) {
+            // Pinch-zoom
+            const dx = e.touches[1].clientX - e.touches[0].clientX;
+            const dy = e.touches[1].clientY - e.touches[0].clientY;
+            const dist = Math.hypot(dx, dy);
+
+            if (this.lastPinchDist > 0) {
+                const delta = (dist - this.lastPinchDist) * 3; // sensitivity
+                // Zoom toward midpoint of two fingers
+                const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+                const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+                const rect = this.canvas.getBoundingClientRect();
+                const ratio = window.devicePixelRatio;
+                const sx = (midX - rect.left) * ratio;
+                const sy = (midY - rect.top) * ratio;
+                this.camera.zoom(delta, sx, sy);
+                this.emit('canvas:zoom', this.camera.getState());
+            }
+            this.lastPinchDist = dist;
+            return;
+        }
+
+        if (e.touches.length !== 1 || !this.drag.active) return;
+
+        const [sx, sy] = this.getTouchCanvasCoords(e.touches[0]);
+        const dx = sx - this.drag.lastX;
+        const dy = sy - this.drag.lastY;
+        const totalDx = Math.abs(sx - this.drag.startX);
+        const totalDy = Math.abs(sy - this.drag.startY);
+
+        if (totalDx > 3 || totalDy > 3) {
+            this.drag.moved = true;
+        }
+
+        if (this.drag.isPan && this.opts.pan) {
+            this.camera.pan(dx, dy);
+            this.emit('canvas:pan', this.camera.getState());
+        } else if (this.drag.nodeId !== null && this.opts.dragNodes) {
+            const [wx1, wy1] = this.camera.screenToWorld(this.drag.lastX, this.drag.lastY);
+            const [wx2, wy2] = this.camera.screenToWorld(sx, sy);
+            const id = this.drag.nodeId;
+            const ddx = wx2 - wx1;
+            const ddy = wy2 - wy1;
+            const newX = this.graph.positions[id * 2] + ddx;
+            const newY = this.graph.positions[id * 2 + 1] + ddy;
+            this.graph.setNodePosition(id, newX, newY);
+
+            if (this.gravityPull) {
+                this.applyGravityPull(id, ddx, ddy);
+            }
+
+            this.emit('node:drag', this.graph.getNode(id));
+        }
+
+        this.drag.lastX = sx;
+        this.drag.lastY = sy;
+    }
+
+    private onTouchEnd(e: TouchEvent): void {
+        // Reset pinch state when fingers lift
+        if (e.touches.length < 2) {
+            this.lastPinchDist = 0;
+        }
+
+        if (e.touches.length > 0) return; // still touching
+
+        if (this.drag.active) {
+            const isClick = !this.drag.moved;
+
+            if (this.drag.nodeId !== null) {
+                this.emit('node:dragend', this.graph.getNode(this.drag.nodeId));
+
+                if (isClick && this.opts.selection) {
+                    const id = this.drag.nodeId;
+                    // Touch always acts as single-select
+                    for (const prev of this.selectedNodes) {
+                        if (prev !== id) this.emit('node:deselect', this.graph.getNode(prev));
+                    }
+                    this.selectedNodes.clear();
+                    this.selectedNodes.add(id);
+                    this.emit('node:select', this.graph.getNode(id));
+                    this.emit('node:click', this.graph.getNode(id));
+                }
+            } else {
+                if (isClick) {
+                    if (this.opts.selection) {
+                        for (const id of this.selectedNodes) {
+                            this.emit('node:deselect', this.graph.getNode(id));
+                        }
+                        this.selectedNodes.clear();
+                    }
+                    this.emit('canvas:click', null);
+                }
+            }
+
+            this.drag.active = false;
+            this.drag.nodeId = null;
+        }
     }
 
     private onWheel(e: WheelEvent): void {
