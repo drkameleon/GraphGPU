@@ -699,16 +699,17 @@ export class Renderer {
             // ---- Edge labels ----
             // Render edge tags at the midpoint of each edge, sized by zoom
             const camZoomGlobal = Math.abs(this.camera.matrix[0]);
-            const edgeFontSize = Math.max(9, Math.min(camZoomGlobal * cw * 0.028, 22));
-
             // Compute edge visual width in CSS pixels (mirrors shader logic)
             // Edge width matches shader: 15% of projected node radius
             const nodeWorldSize = this.nodeScale * 0.01;
             const projectedNodeR = nodeWorldSize * camZoomGlobal * cw * 0.5;
             const edgeWidthPx = Math.max(2.5, projectedNodeR * 1.0);
 
+            // Edge label size tracks projected node radius (consistent with node labels)
+            const edgeFontSize = Math.max(8, Math.min(projectedNodeR * 0.45, 18));
+
             // Only render edge labels when zoomed in enough to read them
-            if (edgeFontSize >= 9.5) {
+            if (edgeFontSize >= 8.5) {
                 lctx.font = `500 ${edgeFontSize}px -apple-system,"Segoe UI",Helvetica,Arial,sans-serif`;
                 lctx.textAlign = 'center';
                 lctx.textBaseline = 'middle';
