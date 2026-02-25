@@ -134,10 +134,9 @@ export class QuadTree {
         let fx = 0;
         let fy = 0;
 
-        // Distance softening: prevents extreme forces at very close range.
-        // Without this, nodes that land nearly on top of each other get
-        // enormous repulsion that overshoots, causing jitter.
-        const softening = 0.001;
+        // Distance softening: prevents division by zero for coincident nodes.
+        // Must be tiny relative to typical inter-node distances in [-1,1] space.
+        const softening = 1e-8;
 
         // Iterative tree walk using pre-allocated stack
         let stack = this.walkStack;
@@ -232,9 +231,12 @@ export class QuadTree {
     private insert(nodeIdx: number, bodyId: number, bx: number, by: number): void {
         const base = nodeIdx * NODE_SIZE;
         const existingBody = this.pool[base + BODY_ID];
+        const hasChildren =
+            this.pool[base + CHILD_0] >= 0 || this.pool[base + CHILD_1] >= 0 ||
+            this.pool[base + CHILD_2] >= 0 || this.pool[base + CHILD_3] >= 0;
 
         // Case 1: Empty leaf — place body here
-        if (existingBody < 0 && this.pool[base + MASS] === 0) {
+        if (existingBody < 0 && !hasChildren) {
             this.pool[base + BODY_ID] = bodyId;
             this.pool[base + COM_X] = bx;
             this.pool[base + COM_Y] = by;
