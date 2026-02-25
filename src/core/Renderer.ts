@@ -691,8 +691,8 @@ export class Renderer {
             const edgeFontSize = Math.max(8, Math.min(camZoomGlobal * cw * 0.012, 16));
 
             // Compute edge visual width in CSS pixels (mirrors shader logic)
-            const minEdgeW = 3.0; // matches shader minWidth in px
-            const zoomEdgeW = 0.004 * camZoomGlobal * cw * 0.5; // matches shader zoomWidth → CSS px
+            const minEdgeW = 1.5; // matches shader minWidth in px
+            const zoomEdgeW = 0.003 * camZoomGlobal * cw * 0.5; // matches shader zoomWidth → CSS px
             const edgeWidthPx = Math.max(minEdgeW, zoomEdgeW);
 
             // Only render edge labels when zoomed in enough to read them

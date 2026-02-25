@@ -183,9 +183,9 @@ fn vs_edge(
   let fwd = dir / len;
   let perp = vec2f(-fwd.y, fwd.x);
 
-  // Width: 3px minimum on screen, grows with zoom
-  let minWidth = 3.0 / frame.viewport.y;
-  let zoomWidth = 0.004 * length(vec2f(frame.camera.col0.x, frame.camera.col0.y));
+  // Width: 1.5px minimum on screen, grows with zoom
+  let minWidth = 1.5 / frame.viewport.y;
+  let zoomWidth = 0.003 * length(vec2f(frame.camera.col0.x, frame.camera.col0.y));
   let w = max(minWidth, zoomWidth);
 
   let pos = mix(srcProj, tgtProj, t) + perp * s * w;

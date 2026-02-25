@@ -141,10 +141,14 @@ createApp({
             if (!g) return;
             if (layoutRunning.value) g.stopLayout();
             g.resetPositions();
+            // Pre-stabilize offscreen
+            for (let i = 0; i < 300; i++) {
+                g.stepLayout(3);
+            }
+            g.fitView(0.15);
             g.startLayout(LAYOUT_OPTS);
             layoutRunning.value = true;
-            g.resetView();
-            setTimeout(() => g!.fitView(0.15), 1500);
+            setTimeout(() => g!.fitView(0.15), 800);
         }
 
         function toggleAnimated(): void {
@@ -215,7 +219,7 @@ createApp({
                 canvas,
                 palette: 'vibrant',
                 nodeSize: 5,
-                edgeOpacity: 0.7,
+                edgeOpacity: 0.45,
                 antialias: true,
                 background: LIGHT_BG,
                 interaction: {
@@ -237,9 +241,18 @@ createApp({
             // ── Populate ──
             populateGraph(g);
 
-            // ── Layout ──
+            // ── Pre-stabilize layout (run offscreen before showing) ──
+            // Run many iterations synchronously so the graph is settled
+            // before the user sees anything.
+            for (let i = 0; i < 300; i++) {
+                g.stepLayout(3);
+            }
+            g.fitView(0.15);
+
+            // Now start the live layout for final settling
             g.startLayout(LAYOUT_OPTS);
-            setTimeout(() => g!.fitView(0.15), 1500);
+            // Fit again shortly after for any remaining drift
+            setTimeout(() => g!.fitView(0.15), 800);
             updateCounts();
             refreshLegend();
 
