@@ -582,8 +582,18 @@ export class Renderer {
         // Label canvas: sits IN FRONT of the WebGPU canvas
         this.labelCanvas = document.createElement('canvas');
         this.labelCanvas.style.cssText =
-            'position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:2;';
-        document.body.appendChild(this.labelCanvas);
+            'position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:2;';
+
+        // Append to canvas parent so the overlay is scoped to the graph container,
+        // not the whole page. Ensure the parent is a positioning context.
+        const parent = this.canvas.parentElement ?? document.body;
+        if (parent !== document.body) {
+            const pos = getComputedStyle(parent).position;
+            if (pos === 'static' || pos === '') {
+                parent.style.position = 'relative';
+            }
+        }
+        parent.appendChild(this.labelCanvas);
         this.labelCtx = this.labelCanvas.getContext('2d');
     }
 
