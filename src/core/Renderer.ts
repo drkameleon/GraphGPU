@@ -695,7 +695,7 @@ export class Renderer {
             // Edge width matches shader: 15% of projected node radius
             const nodeWorldSize = this.nodeScale * 0.01;
             const projectedNodeR = nodeWorldSize * camZoomGlobal * cw * 0.5;
-            const edgeWidthPx = Math.max(1.5, projectedNodeR * 0.15);
+            const edgeWidthPx = Math.max(2.5, projectedNodeR * 1.0);
 
             // Only render edge labels when zoomed in enough to read them
             if (edgeFontSize >= 9) {

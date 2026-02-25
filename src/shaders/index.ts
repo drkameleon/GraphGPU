@@ -182,14 +182,12 @@ fn vs_edge(
   let fwd = dir / len;
   let perp = vec2f(-fwd.y, fwd.x);
 
-  // Width: proportional to node size (fraction of average node diameter)
-  // nodeWorldSize = 1.0 * nodeScale * 0.01 → in projected space: nodeWorldSize * cameraZoom
+  // Width: equal to projected node radius (deliberately oversized for testing)
   let cameraZoom = length(vec2f(frame.camera.col0.x, frame.camera.col0.y));
   let nodeWorldSize = frame.nodeScale * 0.01;
   let projectedNodeR = nodeWorldSize * cameraZoom;
-  // Edge width = ~15% of node radius, with a screen-space floor of 1.5px
-  let minWidth = 1.5 / frame.viewport.y;
-  let w = max(minWidth, projectedNodeR * 0.15);
+  let minWidth = 2.5 / frame.viewport.y;
+  let w = max(minWidth, projectedNodeR * 1.0);
 
   let pos = mix(srcProj, tgtProj, t) + perp * s * w;
 
