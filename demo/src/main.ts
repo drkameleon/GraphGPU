@@ -218,8 +218,8 @@ createApp({
             g = new GraphGPU({
                 canvas,
                 palette: 'vibrant',
-                nodeSize: 5,
-                edgeOpacity: 0.45,
+                nodeSize: 10,
+                edgeOpacity: 0.5,
                 antialias: true,
                 background: LIGHT_BG,
                 interaction: {
