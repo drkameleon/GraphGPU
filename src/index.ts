@@ -388,6 +388,14 @@ export class GraphGPU {
     }
 
     /**
+     * Re-randomize all node positions and restart layout.
+     * Use this for a full "reset to initial state" effect.
+     */
+    resetPositions(): void {
+        this.graph.resetPositions();
+    }
+
+    /**
      * Get current camera state.
      */
     getView(): CameraState {
