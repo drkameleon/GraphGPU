@@ -39,8 +39,8 @@ export interface ForceLayoutConfig {
 
 const DEFAULTS: ForceLayoutConfig = {
     // Tuned for GraphGPU coordinate space (positions in [-1, 1] range).
-    gravitationalConstant: -0.25,  // moderate repulsion
-    barnesHutTheta: 0.5,           // Barnes-Hut approximation (0 = brute-force)
+    gravitationalConstant: -0.35,  // moderate repulsion
+    barnesHutTheta: 0.3,           // Barnes-Hut approximation (0 = brute-force)
     springLength: 0.2,             // short rest length → compact clusters
     springConstant: 0.06,          // moderate spring stiffness
     centralGravity: 0.012,         // strong pull → keeps graph centered and compact

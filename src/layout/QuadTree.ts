@@ -43,10 +43,13 @@ export class QuadTree {
     private capacity: number;
     /** Root node index (always 0 after build) */
     private root: number = -1;
+    /** Pre-allocated stack for iterative tree walk (avoids per-call allocation) */
+    private walkStack: Int32Array;
 
     constructor() {
         this.capacity = INITIAL_POOL;
         this.pool = new Float32Array(this.capacity * NODE_SIZE);
+        this.walkStack = new Int32Array(256);
     }
 
     // =========================================================
@@ -116,7 +119,7 @@ export class QuadTree {
      * @param px        Node's X position
      * @param py        Node's Y position
      * @param G         Gravitational constant (negative = repulsive)
-     * @param theta     Approximation parameter (0.5 is typical)
+     * @param theta     Approximation parameter (0.3–0.5 typical)
      * @returns         [fx, fy] force components
      */
     computeForce(
@@ -131,9 +134,14 @@ export class QuadTree {
         let fx = 0;
         let fy = 0;
 
-        // Iterative tree walk using an explicit stack (avoids recursion overhead)
-        // Stack stores tree node indices to visit
-        const stack: number[] = [this.root];
+        // Distance softening: prevents extreme forces at very close range.
+        // Without this, nodes that land nearly on top of each other get
+        // enormous repulsion that overshoots, causing jitter.
+        const softening = 0.001;
+
+        // Iterative tree walk using pre-allocated stack
+        let stack = this.walkStack;
+        stack[0] = this.root;
         let sp = 1;
 
         while (sp > 0) {
@@ -150,18 +158,15 @@ export class QuadTree {
 
             const dx = px - comX;
             const dy = py - comY;
-            let dist = Math.sqrt(dx * dx + dy * dy);
+            const distSq = dx * dx + dy * dy + softening;
+            const dist = Math.sqrt(distSq);
 
-            // Skip self
+            // Skip self (leaf that IS the querying node)
             if (bodyId === nodeId) continue;
 
             // Leaf node with a single body
             if (bodyId >= 0) {
-                if (dist < 0.0001) {
-                    // Jitter
-                    dist = 0.01 + Math.random() * 0.01;
-                }
-                const forceMag = G / (dist * dist);
+                const forceMag = G / distSq;
                 fx -= (dx / dist) * forceMag;
                 fy -= (dy / dist) * forceMag;
                 continue;
@@ -170,14 +175,20 @@ export class QuadTree {
             // Internal node: check Barnes-Hut criterion
             // If cell is far enough away relative to its size, approximate
             if ((2 * halfSize) / dist < theta) {
-                if (dist < 0.0001) dist = 0.01;
-                const forceMag = G * mass / (dist * dist);
+                const forceMag = G * mass / distSq;
                 fx -= (dx / dist) * forceMag;
                 fy -= (dy / dist) * forceMag;
                 continue;
             }
 
             // Otherwise, recurse into children
+            // Grow stack if needed
+            if (sp + 4 >= stack.length) {
+                const bigger = new Int32Array(stack.length * 2);
+                bigger.set(stack);
+                this.walkStack = bigger;
+                stack = bigger;
+            }
             const c0 = this.pool[base + CHILD_0];
             const c1 = this.pool[base + CHILD_1];
             const c2 = this.pool[base + CHILD_2];
