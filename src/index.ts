@@ -364,6 +364,15 @@ export class GraphGPU {
     }
 
     /**
+     * Handle container/window resize. Updates canvas dimensions,
+     * MSAA texture, and camera aspect ratio.
+     * Call this from your resize handler instead of getGraph().
+     */
+    resize(): void {
+        this.renderer.resizeCanvas();
+    }
+
+    /**
      * Set camera position and zoom.
      */
     setView(x: number, y: number, zoom?: number): void {
@@ -537,6 +546,9 @@ export class GraphGPU {
      */
     destroy(): void {
         this.layout?.stop();
+        this.gpuLayout?.stop();
+        this.gpuLayout?.destroy();
+        this.gpuLayout = null;
         this.controls.destroy();
         this.renderer.destroy();
     }
