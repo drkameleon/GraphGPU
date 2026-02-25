@@ -61,6 +61,10 @@ export class Graph {
     private freeNodes: NodeId[] = [];
     private freeEdges: EdgeId[] = [];
 
+    // --- Adjacency index: nodeId → Set of edgeIds ---
+    // Avoids O(edges) scan when removing a node's edges
+    private nodeAdj: Map<NodeId, Set<EdgeId>> = new Map();
+
     // --- Color management ---
     readonly tagColors: TagColorMap;
 
@@ -277,6 +281,10 @@ export class Graph {
         this.edgeTags[id] = input.tag;
         this.edgeProperties[id] = input.properties ?? {};
 
+        // Update adjacency index
+        this.adjAdd(input.source, id);
+        this.adjAdd(input.target, id);
+
         this.dirtyEdges = true;
         return id;
     }
@@ -294,6 +302,12 @@ export class Graph {
     removeEdge(id: EdgeId): void {
         if (id < 0 || id >= this.edgeCount) return;
         if (this.edgeTags[id] === undefined) return;
+
+        // Clean adjacency index before zeroing
+        const src = this.edgeIndices[id * 2];
+        const tgt = this.edgeIndices[id * 2 + 1];
+        this.adjRemove(src, id);
+        this.adjRemove(tgt, id);
 
         this.edgeIndices[id * 2] = 0;
         this.edgeIndices[id * 2 + 1] = 0;
@@ -314,15 +328,34 @@ export class Graph {
         this.dirtyEdges = true;
     }
 
-    /** Remove all edges connected to a node */
+    /** Remove all edges connected to a node — O(degree) via adjacency index */
     removeNodeEdges(nodeId: NodeId): void {
-        for (let i = 0; i < this.edgeCount; i++) {
-            if (this.edgeTags[i] === undefined) continue;
-            const src = this.edgeIndices[i * 2];
-            const tgt = this.edgeIndices[i * 2 + 1];
-            if (src === nodeId || tgt === nodeId) {
-                this.removeEdge(i);
-            }
+        const adj = this.nodeAdj.get(nodeId);
+        if (!adj) return;
+        // Copy to array because removeEdge mutates the set
+        const edgeIds = [...adj];
+        for (const eid of edgeIds) {
+            this.removeEdge(eid);
+        }
+        this.nodeAdj.delete(nodeId);
+    }
+
+    // --- Adjacency index helpers ---
+
+    private adjAdd(nodeId: NodeId, edgeId: EdgeId): void {
+        let set = this.nodeAdj.get(nodeId);
+        if (!set) {
+            set = new Set();
+            this.nodeAdj.set(nodeId, set);
+        }
+        set.add(edgeId);
+    }
+
+    private adjRemove(nodeId: NodeId, edgeId: EdgeId): void {
+        const set = this.nodeAdj.get(nodeId);
+        if (set) {
+            set.delete(edgeId);
+            if (set.size === 0) this.nodeAdj.delete(nodeId);
         }
     }
 
