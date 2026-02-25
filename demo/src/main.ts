@@ -1,5 +1,5 @@
 // ============================================================
-// GraphGPU Demo — Vue 3 + TypeScript
+// graphGPU Demo — Vue 3 + TypeScript
 // ============================================================
 
 import { GraphGPU } from 'graphgpu';
@@ -32,11 +32,15 @@ const NODE_TYPE_TAGS = ['person', 'movie', 'country', 'book'] as const;
 const PALETTE_NAMES = ['default', 'vibrant', 'pastel', 'earthy', 'inferno', 'playful', 'viridis', 'rainbow'] as const;
 
 const LAYOUT_OPTS = {
-    repulsion: 1.2,
-    attraction: 0.015,
-    gravity: 0.12,
-    damping: 0.9,
-    maxIterations: 400,
+    gravitationalConstant: -2000,
+    springLength: 95,
+    springConstant: 0.04,
+    centralGravity: 0.3,
+    damping: 0.09,
+    timestep: 0.5,
+    maxVelocity: 50,
+    minVelocity: 0.75,
+    maxIterations: 1000,
 } as const;
 
 const LIGHT_BG: [number, number, number, number] = [0.96, 0.96, 0.965, 1];
