@@ -661,7 +661,7 @@ export class Renderer {
                 const label = (node.properties.name ?? node.properties.title ?? node.tag) as string;
                 if (!label) continue;
 
-                const fontSize = Math.max(8, Math.min(nodeScreenR * 0.38, 26));
+                const fontSize = Math.max(7, Math.min(nodeScreenR * 0.28, 22));
                 lctx.font = `600 ${fontSize}px -apple-system,"Segoe UI",Helvetica,Arial,sans-serif`;
 
                 const maxW = nodeScreenR * 1.6;
@@ -691,8 +691,8 @@ export class Renderer {
             const edgeFontSize = Math.max(8, Math.min(camZoomGlobal * cw * 0.012, 16));
 
             // Compute edge visual width in CSS pixels (mirrors shader logic)
-            const minEdgeW = 2.0; // matches shader minWidth in px
-            const zoomEdgeW = 0.0035 * camZoomGlobal * cw * 0.5; // matches shader zoomWidth → CSS px
+            const minEdgeW = 2.5; // matches shader minWidth in px
+            const zoomEdgeW = 0.0038 * camZoomGlobal * cw * 0.5; // matches shader zoomWidth → CSS px
             const edgeWidthPx = Math.max(minEdgeW, zoomEdgeW);
 
             // Only render edge labels when zoomed in enough to read them

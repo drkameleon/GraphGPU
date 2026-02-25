@@ -218,8 +218,8 @@ createApp({
             g = new GraphGPU({
                 canvas,
                 palette: 'vibrant',
-                nodeSize: 10,
-                edgeOpacity: 0.5,
+                nodeSize: 8,
+                edgeOpacity: 0.65,
                 antialias: true,
                 background: LIGHT_BG,
                 interaction: {
@@ -331,7 +331,6 @@ function populateGraph(g: GraphGPU): void {
     const fr = g.put('country', { name: 'France' });
     const de = g.put('country', { name: 'Germany' });
     const se = g.put('country', { name: 'Sweden' });
-    const _es = g.put('country', { name: 'Spain' });
     const pl = g.put('country', { name: 'Poland' });
 
     // People

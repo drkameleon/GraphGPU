@@ -34,14 +34,14 @@ export interface ForceLayoutConfig {
 
 const DEFAULTS: ForceLayoutConfig = {
     // Tuned for GraphGPU coordinate space (positions in [-1, 1] range).
-    gravitationalConstant: -0.4,   // repulsion strength (less explosive)
-    springLength: 0.3,             // shorter rest length → tighter clusters
+    gravitationalConstant: -0.25,  // moderate repulsion
+    springLength: 0.2,             // short rest length → compact clusters
     springConstant: 0.06,          // moderate spring stiffness
-    centralGravity: 0.008,         // pull toward center (keeps graph compact)
-    damping: 0.15,                 // higher damping → smoother/less nervous
-    timestep: 0.4,                 // slightly smaller steps → more stable
-    maxVelocity: 0.08,             // lower cap → no sudden jumps
-    minVelocity: 0.0008,           // stabilization threshold
+    centralGravity: 0.012,         // strong pull → keeps graph centered and compact
+    damping: 0.18,                 // higher damping → smooth elastic settling
+    timestep: 0.35,                // smaller steps → stable integration
+    maxVelocity: 0.06,             // prevent sudden jumps
+    minVelocity: 0.0005,           // stabilization threshold
     maxIterations: 1000,
 };
 

@@ -111,9 +111,13 @@ export class Camera {
         this.x = (minX + maxX) / 2;
         this.y = (minY + maxY) / 2;
 
-        const scaleX = (2 * (1 - padding)) / (w * this.aspectRatio);
-        const scaleY = (2 * (1 - padding)) / h;
-        this.zoomLevel = Math.min(scaleX, scaleY);
+        const margin = 1 - padding;
+        // In update(): sx = zoomLevel / aspectRatio, sy = zoomLevel
+        // To fit width:  sx * (w/2) = margin → zoomLevel = 2 * margin * aspectRatio / w
+        // To fit height: sy * (h/2) = margin → zoomLevel = 2 * margin / h
+        const fitW = w > 0 ? (2 * margin * this.aspectRatio) / w : Infinity;
+        const fitH = h > 0 ? (2 * margin) / h : Infinity;
+        this.zoomLevel = Math.min(fitW, fitH);
         this.zoomLevel = Math.max(this.zoomMin, Math.min(this.zoomMax, this.zoomLevel));
 
         this.dirty = true;
