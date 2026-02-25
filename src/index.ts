@@ -420,6 +420,17 @@ export class GraphGPU {
                 this.graph.setNodeColor(id, color.bg);
             }
         }
+        // Re-color all existing edges
+        for (const id of this.graph.activeEdgeIds()) {
+            const edge = this.graph.getEdge(id);
+            if (edge?.tag) {
+                const color = this.graph.tagColors.getColor(edge.tag);
+                this.graph.edgeColors[id * 3] = color.bg[0];
+                this.graph.edgeColors[id * 3 + 1] = color.bg[1];
+                this.graph.edgeColors[id * 3 + 2] = color.bg[2];
+            }
+        }
+        this.graph.dirtyEdges = true;
     }
 
     /**
@@ -471,10 +482,34 @@ export class GraphGPU {
     }
 
     /**
-     * Enable gravity-pull mode: dragging a node pulls connected nodes with spring physics.
+     * Enable animated mode: live physics simulation that never auto-stops.
+     * Dragging a node pins it while the rest of the graph reacts with
+     * spring-like elasticity (vis.js-style "wobbly" physics).
      */
-    setGravityPull(enabled: boolean, strength?: number): void {
-        this.controls.setGravityPull(enabled, strength);
+    setAnimated(enabled: boolean): void {
+        if (!this.layout) {
+            // Create layout if not yet started
+            this.layout = new ForceLayout(this.graph, {
+                type: 'force',
+                ...this.options.layout,
+            });
+        }
+        this.layout.setAnimated(enabled);
+        this.controls.setAnimatedMode(enabled, this.layout);
+    }
+
+    /**
+     * Pin a node: its position is fixed, physics won't move it.
+     */
+    pinNode(nodeId: number): void {
+        this.layout?.pin(nodeId);
+    }
+
+    /**
+     * Unpin a node: rejoin the physics simulation.
+     */
+    unpinNode(nodeId: number): void {
+        this.layout?.unpin(nodeId);
     }
 
     // =========================================================
