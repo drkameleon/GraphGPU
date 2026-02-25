@@ -1,65 +1,320 @@
 // ============================================================
-// graphGPU Demo - Cinema Graph (Sample 11)
-// ============================================================
-// Recreates the iconic graphGPU sample: directors, actors,
-// movies, countries, and books - all connected.
+// graphGPU Demo — Vue 3 + TypeScript
 // ============================================================
 
 import { GraphGPU } from 'graphgpu';
 import type { Node, NodeId } from 'graphgpu';
 
-// -----------------------------------------------------------
-// Color mappings for legend
-// -----------------------------------------------------------
-const TAG_COLORS: Record<string, string> = {
-    person: '#ff6b6b',
-    movie: '#ffd93d',
-    country: '#6bcb77',
-    book: '#4d96ff',
-};
+const { createApp, ref, reactive, computed, onMounted } = Vue;
 
-// -----------------------------------------------------------
-// Initialize graphGPU
-// -----------------------------------------------------------
-async function main() {
-    const canvas = document.getElementById('graph-canvas') as HTMLCanvasElement;
-    const fallback = document.getElementById('fallback')!;
+// ── Types ──
 
-    const g = new GraphGPU({
-        canvas,
-        palette: 'vibrant',
-        nodeSize: 5,
-        edgeOpacity: 0.7,
-        antialias: true,
-        background: [0.03, 0.03, 0.05, 1],
-        interaction: {
-            pan: true,
-            zoom: true,
-            dragNodes: true,
-            hover: true,
-            selection: true,
-            multiSelect: true,
-        },
-    });
+interface LegendItem {
+    tag: string;
+    color: string;
+}
 
-    const ok = await g.init();
-    if (!ok) {
-        fallback.classList.add('visible');
-        return;
-    }
+interface EditModalState {
+    open: boolean;
+    nodeId: NodeId | null;
+    properties: Record<string, unknown>;
+}
 
-    // -----------------------------------------------------------
-    // Populate the graph (mirrors graphGPU's sample11.art)
-    // -----------------------------------------------------------
+interface DeleteModalState {
+    open: boolean;
+    nodeId: NodeId | null;
+    label: string;
+}
 
-    // Assign colors by tag
-    const graph = g.getGraph();
-    graph.tagColors.setColor('person', '#ff6b6b');
-    graph.tagColors.setColor('movie', '#ffd93d');
-    graph.tagColors.setColor('country', '#6bcb77');
-    graph.tagColors.setColor('book', '#4d96ff');
+// ── Constants ──
 
-    // --- Countries ---
+const NODE_TYPE_TAGS = ['person', 'movie', 'country', 'book'] as const;
+const PALETTE_NAMES = ['default', 'vibrant', 'pastel', 'earthy', 'inferno', 'playful', 'viridis', 'rainbow'] as const;
+
+const LAYOUT_OPTS = {
+    repulsion: 1.2,
+    attraction: 0.015,
+    gravity: 0.12,
+    damping: 0.9,
+    maxIterations: 400,
+} as const;
+
+const LIGHT_BG: [number, number, number, number] = [0.96, 0.96, 0.965, 1];
+const DARK_BG: [number, number, number, number] = [0.118, 0.122, 0.149, 1];
+
+// ── Helpers ──
+
+function rgbaToHex(bg: readonly number[]): string {
+    return `rgb(${Math.round(bg[0] * 255)},${Math.round(bg[1] * 255)},${Math.round(bg[2] * 255)})`;
+}
+
+function getNodeLabel(node: Node): string {
+    return (node.properties.name ?? node.properties.title ?? node.tag) as string;
+}
+
+// ── App ──
+
+createApp({
+    setup() {
+        let g: GraphGPU | null = null;
+
+        // State
+        const darkMode = ref(false);
+        const layoutRunning = ref(true);
+        const gravityEnabled = ref(false);
+        const activePalette = ref('vibrant');
+        const nodeCount = ref(0);
+        const edgeCount = ref(0);
+
+        // Selection / hover
+        const selectedNode = ref<Node | null>(null);
+        const selectedNodeId = ref<NodeId | null>(null);
+        const selectedNodeColor = ref('#888');
+        const hoveredNode = ref<Node | null>(null);
+        const hoveredNodeColor = ref('#888');
+
+        // Tooltip
+        const tooltipVisible = ref(false);
+        const tooltipStyle = ref<Record<string, string>>({});
+        const tooltipTag = ref('');
+        const tooltipName = ref('');
+        const tooltipProps = ref('');
+        const tooltipColor = ref('#888');
+
+        // Modals
+        const editModal = reactive<EditModalState>({ open: false, nodeId: null, properties: {} });
+        const deleteModal = reactive<DeleteModalState>({ open: false, nodeId: null, label: '' });
+
+        // Legend
+        const legendItems = ref<LegendItem[]>([]);
+        const tagColorCache: Record<string, string> = {};
+
+        // Computed
+        const hasSelection = computed(() => selectedNode.value !== null);
+        const paletteNames = PALETTE_NAMES;
+
+        // ── Palette / Legend ──
+
+        function refreshLegend(): void {
+            if (!g) return;
+            const items: LegendItem[] = [];
+            for (const [tag, { bg }] of g.getTagColors()) {
+                const hex = rgbaToHex(bg);
+                tagColorCache[tag] = hex;
+                if ((NODE_TYPE_TAGS as readonly string[]).includes(tag)) {
+                    items.push({ tag, color: hex });
+                }
+            }
+            legendItems.value = items;
+        }
+
+        function updateCounts(): void {
+            if (!g) return;
+            nodeCount.value = g.nodeCount;
+            edgeCount.value = g.edgeCount;
+        }
+
+        function getPalettePreview(name: string): string {
+            return (GraphGPU as any).palettes[name]?.colors?.[0] ?? '#666';
+        }
+
+        function switchPalette(name: string): void {
+            activePalette.value = name;
+            g?.setPalette(name);
+            refreshLegend();
+        }
+
+        // ── Layout / View ──
+
+        function toggleLayout(): void {
+            if (!g) return;
+            if (layoutRunning.value) {
+                g.stopLayout();
+                layoutRunning.value = false;
+            } else {
+                g.startLayout(LAYOUT_OPTS);
+                layoutRunning.value = true;
+            }
+        }
+
+        function fitView(): void {
+            g?.fitView(0.15);
+        }
+
+        function resetGraph(): void {
+            if (!g) return;
+            if (layoutRunning.value) g.stopLayout();
+            g.resetPositions();
+            g.startLayout(LAYOUT_OPTS);
+            layoutRunning.value = true;
+            g.resetView();
+            setTimeout(() => g!.fitView(0.15), 1500);
+        }
+
+        function toggleGravity(): void {
+            gravityEnabled.value = !gravityEnabled.value;
+            g?.setGravityPull(gravityEnabled.value, 0.15);
+        }
+
+        // ── Theme ──
+
+        function toggleDarkMode(): void {
+            darkMode.value = !darkMode.value;
+            document.body.classList.toggle('dark', darkMode.value);
+            if (g) {
+                g.setBackground(darkMode.value ? DARK_BG : LIGHT_BG);
+            }
+        }
+
+        // ── Node editing ──
+
+        function showEditModal(): void {
+            if (!g || selectedNodeId.value === null) return;
+            const node = g.getGraph().getNode(selectedNodeId.value);
+            if (!node) return;
+            editModal.nodeId = selectedNodeId.value;
+            editModal.properties = { ...node.properties };
+            editModal.open = true;
+        }
+
+        function saveEdit(): void {
+            if (!g || editModal.nodeId === null) return;
+            const graph = g.getGraph();
+            for (const [key, val] of Object.entries(editModal.properties)) {
+                graph.setNodeProperty(editModal.nodeId, key, val);
+            }
+            const updated = graph.getNode(editModal.nodeId);
+            if (updated) selectedNode.value = { ...updated };
+            editModal.open = false;
+            updateCounts();
+        }
+
+        // ── Node deletion ──
+
+        function deleteSelected(): void {
+            if (!g || selectedNodeId.value === null) return;
+            const node = g.getGraph().getNode(selectedNodeId.value);
+            if (!node) return;
+            deleteModal.nodeId = selectedNodeId.value;
+            deleteModal.label = getNodeLabel(node);
+            deleteModal.open = true;
+        }
+
+        function confirmDelete(): void {
+            if (!g || deleteModal.nodeId === null) return;
+            g.unput(deleteModal.nodeId);
+            selectedNode.value = null;
+            selectedNodeId.value = null;
+            deleteModal.open = false;
+            updateCounts();
+        }
+
+        // ── Init ──
+
+        onMounted(async () => {
+            const canvas = document.getElementById('graph-canvas') as HTMLCanvasElement;
+            const fallback = document.getElementById('fallback')!;
+
+            g = new GraphGPU({
+                canvas,
+                palette: 'vibrant',
+                nodeSize: 5,
+                edgeOpacity: 0.7,
+                antialias: true,
+                background: LIGHT_BG,
+                interaction: {
+                    pan: true, zoom: true, dragNodes: true,
+                    hover: true, selection: true, multiSelect: false,
+                },
+            });
+
+            const ok = await g.init();
+            if (!ok) { fallback.classList.add('visible'); return; }
+
+            // ── Tag colors ──
+            const graph = g.getGraph();
+            graph.tagColors.setColor('person', '#ff6b6b');
+            graph.tagColors.setColor('movie', '#ffd93d');
+            graph.tagColors.setColor('country', '#6bcb77');
+            graph.tagColors.setColor('book', '#4d96ff');
+
+            // ── Populate ──
+            populateGraph(g);
+
+            // ── Layout ──
+            g.startLayout(LAYOUT_OPTS);
+            setTimeout(() => g!.fitView(0.15), 1500);
+            updateCounts();
+            refreshLegend();
+
+            // ── Events ──
+            g.on('node:hover', (e: { target: Node }) => {
+                const node = e.target;
+                if (!node) return;
+                hoveredNode.value = { ...node };
+                hoveredNodeColor.value = tagColorCache[node.tag] ?? '#888';
+                tooltipTag.value = node.tag;
+                tooltipName.value = getNodeLabel(node);
+                tooltipColor.value = tagColorCache[node.tag] ?? '#888';
+                tooltipProps.value = Object.entries(node.properties)
+                    .filter(([k]) => k !== 'name' && k !== 'title')
+                    .map(([k, v]) => `${k}: ${v}`)
+                    .join('\n');
+                tooltipVisible.value = true;
+            });
+
+            g.on('node:hoverout', () => {
+                hoveredNode.value = null;
+                tooltipVisible.value = false;
+            });
+
+            g.on('node:select', (e: { target: Node }) => {
+                const node = e.target;
+                if (!node) return;
+                selectedNode.value = { ...node };
+                selectedNodeId.value = node.id;
+                selectedNodeColor.value = tagColorCache[node.tag] ?? '#888';
+            });
+
+            g.on('node:deselect', () => {
+                selectedNode.value = null;
+                selectedNodeId.value = null;
+            });
+
+            canvas.addEventListener('mousemove', (e: MouseEvent) => {
+                tooltipStyle.value = {
+                    left: `${e.clientX + 14}px`,
+                    top: `${e.clientY - 8}px`,
+                };
+            });
+
+            window.addEventListener('resize', () => g!.resize());
+
+            // Console access
+            (window as any).g = g;
+        });
+
+        return {
+            darkMode, layoutRunning, gravityEnabled, activePalette,
+            nodeCount, edgeCount,
+            selectedNode, selectedNodeColor, hoveredNode, hoveredNodeColor,
+            hasSelection,
+            tooltipVisible, tooltipStyle, tooltipTag, tooltipName, tooltipProps, tooltipColor,
+            legendItems, paletteNames,
+            editModal, deleteModal,
+            toggleLayout, fitView, resetGraph, toggleGravity, toggleDarkMode,
+            switchPalette, getPalettePreview,
+            showEditModal, saveEdit, deleteSelected, confirmDelete,
+        };
+    },
+}).mount('#app');
+
+// ============================================================
+// Graph data (cinema sample)
+// ============================================================
+
+function populateGraph(g: GraphGPU): void {
+    // Countries
     const uk = g.put('country', { name: 'United Kingdom' });
     const au = g.put('country', { name: 'Australia' });
     const us = g.put('country', { name: 'United States' });
@@ -67,64 +322,60 @@ async function main() {
     const fr = g.put('country', { name: 'France' });
     const de = g.put('country', { name: 'Germany' });
     const se = g.put('country', { name: 'Sweden' });
-    const es = g.put('country', { name: 'Spain' });
+    const _es = g.put('country', { name: 'Spain' });
     const pl = g.put('country', { name: 'Poland' });
 
-    // --- People ---
-    const nolan    = g.put('person', { name: 'Christopher Nolan', birthday: 1970 });
-    const pearce   = g.put('person', { name: 'Guy Pearce', birthday: 1967 });
-    const hanson   = g.put('person', { name: 'Curtis Hanson', birthday: 1945 });
-    const spacey   = g.put('person', { name: 'Kevin Spacey', birthday: 1959 });
+    // People
+    const nolan = g.put('person', { name: 'Christopher Nolan', birthday: 1970 });
+    const pearce = g.put('person', { name: 'Guy Pearce', birthday: 1967 });
+    const hanson = g.put('person', { name: 'Curtis Hanson', birthday: 1945 });
+    const spacey = g.put('person', { name: 'Kevin Spacey', birthday: 1959 });
     const dicaprio = g.put('person', { name: 'Leonardo DiCaprio', birthday: 1974 });
-    const hardy    = g.put('person', { name: 'Tom Hardy', birthday: 1977 });
+    const hardy = g.put('person', { name: 'Tom Hardy', birthday: 1977 });
     const cotillard = g.put('person', { name: 'Marion Cotillard', birthday: 1975 });
-    const moss     = g.put('person', { name: 'Carrie-Ann Moss', birthday: 1967 });
-    const kidman   = g.put('person', { name: 'Nicole Kidman', birthday: 1967 });
-    const cruise   = g.put('person', { name: 'Tom Cruise', birthday: 1962 });
-    const kubrick  = g.put('person', { name: 'Stanley Kubrick', birthday: 1928, died: 1999 });
-    const burton   = g.put('person', { name: 'Tim Burton', birthday: 1958 });
-    const depp     = g.put('person', { name: 'Johnny Depp', birthday: 1965 });
+    const moss = g.put('person', { name: 'Carrie-Ann Moss', birthday: 1967 });
+    const kidman = g.put('person', { name: 'Nicole Kidman', birthday: 1967 });
+    const cruise = g.put('person', { name: 'Tom Cruise', birthday: 1962 });
+    const kubrick = g.put('person', { name: 'Stanley Kubrick', birthday: 1928, died: 1999 });
+    const burton = g.put('person', { name: 'Tim Burton', birthday: 1958 });
+    const depp = g.put('person', { name: 'Johnny Depp', birthday: 1965 });
     const hallstrom = g.put('person', { name: 'Lasse Hallström', birthday: 1946 });
     const scorsese = g.put('person', { name: 'Martin Scorsese', birthday: 1942 });
-    const sydow    = g.put('person', { name: 'Max von Sydow', birthday: 1929, died: 2020 });
-    const binoche  = g.put('person', { name: 'Juliette Binoche', birthday: 1964 });
-    const dench    = g.put('person', { name: 'Judi Dench', birthday: 1934 });
+    const sydow = g.put('person', { name: 'Max von Sydow', birthday: 1929, died: 2020 });
+    const binoche = g.put('person', { name: 'Juliette Binoche', birthday: 1964 });
+    const dench = g.put('person', { name: 'Judi Dench', birthday: 1934 });
     const eastwood = g.put('person', { name: 'Clint Eastwood', birthday: 1930 });
     const polanski = g.put('person', { name: 'Roman Polanski', birthday: 1933 });
-    const olin     = g.put('person', { name: 'Lena Olin', birthday: 1955 });
-    const zimmer   = g.put('person', { name: 'Hans Zimmer', birthday: 1957 });
-    const pook     = g.put('person', { name: 'Jocelyn Pook', birthday: 1960 });
-    const lehane   = g.put('person', { name: 'Dennis Lehane', birthday: 1965 });
-    const penn     = g.put('person', { name: 'Sean Penn', birthday: 1960 });
-    const malick   = g.put('person', { name: 'Terrence Malick', birthday: 1943 });
-    const brody    = g.put('person', { name: 'Adrien Brody', birthday: 1973 });
-    const wach1    = g.put('person', { name: 'Lana Wachowski', birthday: 1965 });
-    const wach2    = g.put('person', { name: 'Lilly Wachowski', birthday: 1967 });
+    const olin = g.put('person', { name: 'Lena Olin', birthday: 1955 });
+    const zimmer = g.put('person', { name: 'Hans Zimmer', birthday: 1957 });
+    const pook = g.put('person', { name: 'Jocelyn Pook', birthday: 1960 });
+    const lehane = g.put('person', { name: 'Dennis Lehane', birthday: 1965 });
+    const penn = g.put('person', { name: 'Sean Penn', birthday: 1960 });
+    const malick = g.put('person', { name: 'Terrence Malick', birthday: 1943 });
+    const brody = g.put('person', { name: 'Adrien Brody', birthday: 1973 });
+    const wach1 = g.put('person', { name: 'Lana Wachowski', birthday: 1965 });
+    const wach2 = g.put('person', { name: 'Lilly Wachowski', birthday: 1967 });
 
-    // --- Movies ---
-    const memento        = g.put('movie', { title: 'Memento', year: 2000 });
-    const inception      = g.put('movie', { title: 'Inception', year: 2010 });
+    // Movies
+    const memento = g.put('movie', { title: 'Memento', year: 2000 });
+    const inception = g.put('movie', { title: 'Inception', year: 2010 });
     const laconfidential = g.put('movie', { title: 'L.A. Confidential', year: 1997 });
-    const matrix         = g.put('movie', { title: 'The Matrix', year: 1999 });
-    const eyes           = g.put('movie', { title: 'Eyes Wide Shut', year: 1999 });
-    const bigfish        = g.put('movie', { title: 'Big Fish', year: 2003 });
-    const sleepyhollow   = g.put('movie', { title: 'Sleepy Hollow', year: 1999 });
-    const chocolat       = g.put('movie', { title: 'Chocolat', year: 2000 });
-    const jedgar         = g.put('movie', { title: 'J. Edgar', year: 2011 });
-    const ninthgate      = g.put('movie', { title: 'The Ninth Gate', year: 1999 });
-    const shutter        = g.put('movie', { title: 'Shutter Island', year: 2010 });
-    const mystic         = g.put('movie', { title: 'Mystic River', year: 2003 });
-    const redline        = g.put('movie', { title: 'Thin Red Line', year: 1998 });
-    const pianist        = g.put('movie', { title: 'The Pianist', year: 2002 });
+    const matrix = g.put('movie', { title: 'The Matrix', year: 1999 });
+    const eyes = g.put('movie', { title: 'Eyes Wide Shut', year: 1999 });
+    const bigfish = g.put('movie', { title: 'Big Fish', year: 2003 });
+    const sleepyhollow = g.put('movie', { title: 'Sleepy Hollow', year: 1999 });
+    const chocolat = g.put('movie', { title: 'Chocolat', year: 2000 });
+    const jedgar = g.put('movie', { title: 'J. Edgar', year: 2011 });
+    const ninthgate = g.put('movie', { title: 'The Ninth Gate', year: 1999 });
+    const shutter = g.put('movie', { title: 'Shutter Island', year: 2010 });
+    const mystic = g.put('movie', { title: 'Mystic River', year: 2003 });
+    const redline = g.put('movie', { title: 'Thin Red Line', year: 1998 });
+    const pianist = g.put('movie', { title: 'The Pianist', year: 2002 });
 
-    // --- Books ---
+    // Books
     const mysticB = g.put('book', { title: 'Mystic River', year: 2001, language: 'en' });
 
-    // -----------------------------------------------------------
-    // Relationships (mirrors graphGPU's ~> operator)
-    // -----------------------------------------------------------
-
-    // isFrom
+    // ── Relationships ──
     g.link([nolan, hardy, dench, pook], 'isFrom', uk);
     g.link([pearce, kidman], 'isFrom', au);
     g.link([malick, brody, hanson, spacey, dicaprio, wach1, wach2, cruise, kubrick, burton, depp, eastwood, scorsese, lehane, penn], 'isFrom', us);
@@ -134,7 +385,6 @@ async function main() {
     g.link([hallstrom, olin, sydow], 'isFrom', se);
     g.link(zimmer, 'isFrom', de);
 
-    // directed
     g.link(nolan, 'directed', [memento, inception]);
     g.link(hanson, 'directed', laconfidential);
     g.link([wach1, wach2], 'directed', matrix);
@@ -146,7 +396,6 @@ async function main() {
     g.link(scorsese, 'directed', shutter);
     g.link(malick, 'directed', [pianist, redline]);
 
-    // actedIn
     g.link(pearce, 'actedIn', [memento, laconfidential]);
     g.link(spacey, 'actedIn', laconfidential);
     g.link([dicaprio, hardy, cotillard], 'actedIn', inception);
@@ -161,245 +410,11 @@ async function main() {
     g.link(penn, 'actedIn', [mystic, redline]);
     g.link(brody, 'actedIn', [redline, pianist]);
 
-    // composed
     g.link(zimmer, 'composed', inception);
     g.link(pook, 'composed', eyes);
-
-    // written
     g.link(nolan, 'written', inception);
     g.link(lehane, 'written', mysticB);
-
-    // basedOn
     g.link(mystic, 'basedOn', mysticB);
-
-    // sibling / married
     g.link(wach1, 'sibling', wach2);
     g.link(cruise, 'married', kidman);
-
-    // -----------------------------------------------------------
-    // Layout
-    // -----------------------------------------------------------
-
-    g.startLayout({
-        repulsion: 1.2,
-        attraction: 0.015,
-        gravity: 0.12,
-        damping: 0.9,
-        maxIterations: 400,
-    });
-
-    // Auto-fit after layout settles
-    // Single fitView after layout has had a moment to settle
-    setTimeout(() => g.fitView(0.15), 1500);
-
-    // -----------------------------------------------------------
-    // UI: Stats
-    // -----------------------------------------------------------
-    const statsEl = document.getElementById('stats')!;
-
-    function updateStats() {
-        statsEl.innerHTML = `
-            <span class="value">${g.nodeCount}</span> nodes ·
-            <span class="value">${g.edgeCount}</span> edges<br>
-            <span class="badge">WebGPU</span>
-        `;
-    }
-    updateStats();
-
-    // -----------------------------------------------------------
-    // UI: Legend (refreshable)
-    // -----------------------------------------------------------
-    const legendEl = document.getElementById('legend')!;
-
-    function refreshLegend() {
-        legendEl.innerHTML = '';
-        const tagColors = g.getTagColors();
-        // Only show node-type tags in the legend (person, movie, etc.)
-        // Edge relationship tags (directed, actedIn, etc.) are shown as edge labels
-        const nodeTypeTags = new Set(['person', 'movie', 'country', 'book']);
-        for (const [tag, { bg }] of tagColors) {
-            if (!nodeTypeTags.has(tag)) continue;
-            const hex = `rgb(${Math.round(bg[0]*255)},${Math.round(bg[1]*255)},${Math.round(bg[2]*255)})`;
-            const item = document.createElement('div');
-            item.className = 'legend-item';
-            item.innerHTML = `<div class="legend-dot" style="background:${hex}"></div>${tag}`;
-            legendEl.appendChild(item);
-        }
-    }
-    refreshLegend();
-
-    // -----------------------------------------------------------
-    // UI: Tooltip on hover
-    // -----------------------------------------------------------
-    const tooltip = document.getElementById('tooltip')!;
-    const tooltipTag = document.getElementById('tooltip-tag')!;
-    const tooltipName = document.getElementById('tooltip-name')!;
-    const tooltipProps = document.getElementById('tooltip-props')!;
-
-    g.on('node:hover', (e) => {
-        const node = e.target as Node;
-        if (!node) return;
-
-        const color = TAG_COLORS[node.tag] ?? '#888';
-        tooltipTag.textContent = node.tag;
-        tooltipTag.style.color = color;
-        tooltipName.textContent =
-            (node.properties.name ?? node.properties.title ?? `#${node.id}`) as string;
-
-        const propsText = Object.entries(node.properties)
-            .filter(([k]) => k !== 'name' && k !== 'title')
-            .map(([k, v]) => `${k}: ${v}`)
-            .join('\n');
-        tooltipProps.textContent = propsText;
-
-        tooltip.classList.add('visible');
-    });
-
-    g.on('node:hoverout', () => {
-        tooltip.classList.remove('visible');
-    });
-
-    // Track mouse for tooltip positioning
-    canvas.addEventListener('mousemove', (e: MouseEvent) => {
-        tooltip.style.left = `${e.clientX + 16}px`;
-        tooltip.style.top = `${e.clientY - 10}px`;
-    });
-
-    // -----------------------------------------------------------
-    // UI: Buttons
-    // -----------------------------------------------------------
-    const btnLayout = document.getElementById('btn-layout')!;
-    const btnFit = document.getElementById('btn-fit')!;
-    const btnReset = document.getElementById('btn-reset')!;
-    const btnBg = document.getElementById('btn-bg')!;
-    const btnSelect = document.getElementById('btn-select')!;
-    const btnMulti = document.getElementById('btn-multi')!;
-    const btnGravity = document.getElementById('btn-gravity')!;
-
-    let layoutRunning = true;
-    btnLayout.classList.add('active');
-
-    btnLayout.addEventListener('click', () => {
-        if (layoutRunning) {
-            g.stopLayout();
-            layoutRunning = false;
-            btnLayout.classList.remove('active');
-            btnLayout.textContent = '▶ layout';
-        } else {
-            g.startLayout({ repulsion: 1.2, attraction: 0.015, gravity: 0.12 });
-            layoutRunning = true;
-            btnLayout.classList.add('active');
-            btnLayout.textContent = '⟳ layout';
-        }
-    });
-
-    btnFit.addEventListener('click', () => g.fitView(0.15));
-    btnReset.addEventListener('click', () => {
-        // Stop current layout if running
-        if (layoutRunning) {
-            g.stopLayout();
-        }
-        // Re-randomize all node positions
-        g.resetPositions();
-        // Restart layout so the graph re-forms organically
-        g.startLayout({ repulsion: 1.2, attraction: 0.015, gravity: 0.12, damping: 0.9, maxIterations: 400 });
-        layoutRunning = true;
-        btnLayout.classList.add('active');
-        btnLayout.textContent = '⟳ layout';
-        // Reset camera and fit after layout settles
-        g.resetView();
-        setTimeout(() => g.fitView(0.15), 1500);
-    });
-
-    // Background toggle: dark ↔ light
-    let darkBg = true;
-    btnBg.addEventListener('click', () => {
-        darkBg = !darkBg;
-        if (darkBg) {
-            g.setBackground([0.03, 0.03, 0.05, 1]);
-            document.body.style.background = '#08080c';
-        } else {
-            g.setBackground([0.96, 0.96, 0.97, 1]);
-            document.body.style.background = '#f5f5f7';
-        }
-        btnBg.classList.toggle('active', !darkBg);
-    });
-
-    // Selection toggle
-    let selectEnabled = true;
-    btnSelect.addEventListener('click', () => {
-        selectEnabled = !selectEnabled;
-        g.setSelectionEnabled(selectEnabled);
-        btnSelect.classList.toggle('active', selectEnabled);
-    });
-
-    // Multi-select toggle
-    let multiEnabled = true;
-    btnMulti.addEventListener('click', () => {
-        multiEnabled = !multiEnabled;
-        g.setMultiSelectEnabled(multiEnabled);
-        btnMulti.classList.toggle('active', multiEnabled);
-    });
-
-    // Gravity pull toggle
-    let gravityEnabled = false;
-    btnGravity.addEventListener('click', () => {
-        gravityEnabled = !gravityEnabled;
-        g.setGravityPull(gravityEnabled, 0.15);
-        btnGravity.classList.toggle('active', gravityEnabled);
-    });
-
-    // -----------------------------------------------------------
-    // UI: Palette swatches
-    // -----------------------------------------------------------
-    const paletteBar = document.getElementById('palette-bar')!;
-    const paletteNames = ['default', 'vibrant', 'pastel', 'earthy', 'inferno', 'playful', 'viridis', 'rainbow'];
-    let activePalette = 'vibrant';
-
-    for (const name of paletteNames) {
-        const palettes = GraphGPU.palettes;
-        const colors = palettes[name]?.colors ?? [];
-        const swatch = document.createElement('div');
-        swatch.className = `palette-swatch ${name === activePalette ? 'active' : ''}`;
-        swatch.title = name;
-
-        // Use first color as swatch
-        swatch.style.background = colors[0] ?? '#666';
-
-        swatch.addEventListener('click', () => {
-            g.setPalette(name);
-            activePalette = name;
-            paletteBar.querySelectorAll('.palette-swatch').forEach(s => s.classList.remove('active'));
-            swatch.classList.add('active');
-            refreshLegend();
-        });
-
-        paletteBar.appendChild(swatch);
-    }
-
-    window.addEventListener('resize', () => {
-        g.resize(); // update canvas size, MSAA, and camera aspect
-    });
-
-    // -----------------------------------------------------------
-    // Resize handler
-    // -----------------------------------------------------------
-    console.log(`
-    ┌─────────────────────────────────────────┐
-    │  graphGPU - Cinema Graph Demo         │
-    │  ${g.nodeCount} nodes · ${g.edgeCount} edges              │
-    │  WebGPU renderer active                 │
-    │                                         │
-    │  Try:                                   │
-    │    g.fetch('person', {name: 'Nolan'})   │
-    │    g.related(0)                         │
-    │    g.setPalette('inferno')              │
-    └─────────────────────────────────────────┘
-    `);
-
-    // Expose globally for console experimentation
-    (window as any).g = g;
-    (window as any).graphgpu = g;
 }
-
-main().catch(console.error);
