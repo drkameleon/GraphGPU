@@ -138,26 +138,46 @@ export type LayoutType = 'force' | 'force-gpu' | 'circular' | 'grid' | 'none';
 export interface LayoutOptions {
     type: LayoutType;
 
-    /** Force-directed: repulsion strength */
-    repulsion?: number;
+    // ── Repulsion ──
+    /** Gravitational constant (negative = repulsive). vis.js default: -2000 */
+    gravitationalConstant?: number;
 
-    /** Force-directed: attraction strength */
-    attraction?: number;
+    // ── Springs (edges) ──
+    /** Rest length of edge springs. vis.js default: 95 */
+    springLength?: number;
+    /** Spring stiffness. vis.js default: 0.04 */
+    springConstant?: number;
 
-    /** Force-directed: gravity toward center */
-    gravity?: number;
+    // ── Central gravity ──
+    /** Pull strength toward origin. vis.js default: 0.3 */
+    centralGravity?: number;
 
-    /** Force-directed: velocity damping 0-1 */
+    // ── Integration ──
+    /** Velocity damping coefficient. vis.js default: 0.09 */
     damping?: number;
-
-    /** Force-directed: Barnes-Hut theta */
-    barnesHutTheta?: number;
+    /** Integration timestep. vis.js default: 0.5 */
+    timestep?: number;
+    /** Max velocity clamp. vis.js default: 50 */
+    maxVelocity?: number;
+    /** Stabilization threshold (max node velocity). vis.js default: 0.75 */
+    minVelocity?: number;
 
     /** Max iterations before auto-stop */
     maxIterations?: number;
 
+    /** Barnes-Hut theta (for future GPU layout) */
+    barnesHutTheta?: number;
+
     /** Run layout in Web Worker */
     useWorker?: boolean;
+
+    // ── Legacy (mapped internally) ──
+    /** @deprecated Use gravitationalConstant instead */
+    repulsion?: number;
+    /** @deprecated Use springConstant instead */
+    attraction?: number;
+    /** @deprecated Use centralGravity instead */
+    gravity?: number;
 }
 
 // -----------------------------------------------------------
