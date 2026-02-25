@@ -133,6 +133,9 @@ new GraphGPU({
 |--------|-------------|
 | `setPalette(name)` | Switch color palette (recolors nodes AND edges) |
 | `setBackground(rgba)` | Change background color |
+| `setNodeSize(size)` | Change node size at runtime |
+| `setEdgeOpacity(opacity)` | Change edge opacity at runtime |
+| `setLabelsVisible(bool)` | Show or hide all labels (node + edge) |
 | `getTagColors()` | Get current tag→color assignments |
 
 #### Interaction
@@ -194,7 +197,7 @@ npm install
 npm run dev
 ```
 
-Features light/dark theme toggle, palette switching, node editing/deletion, animated physics mode, and a status bar with live node properties.
+Features light/dark theme toggle, palette switching, node editing/deletion, animated physics mode, a live settings panel (node size, edge opacity, labels, all physics parameters), and a status bar with live node properties.
 
 ### Architecture
 
@@ -222,7 +225,8 @@ src/
 
 ### Contributing
 
-You are 100% welcome! Just make a PR. 🚀
+Anything you notice or want to suggest, just [open an issue](https://github.com/drkameleon/GraphGPU/issues).
+Want to contribute code? You are 100% welcome too! Just make a PR. 🚀
 
 <hr/>
 

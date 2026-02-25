@@ -270,6 +270,7 @@ export class GraphGPU {
      */
     startLayout(opts?: {
         gravitationalConstant?: number;
+        barnesHutTheta?: number;
         springLength?: number;
         springConstant?: number;
         centralGravity?: number;
@@ -471,6 +472,27 @@ export class GraphGPU {
      */
     setBackground(color: [number, number, number, number]): void {
         this.renderer.setBackground(color);
+    }
+
+    /**
+     * Change node size at runtime.
+     */
+    setNodeSize(size: number): void {
+        this.renderer.setNodeScale(size);
+    }
+
+    /**
+     * Change edge opacity at runtime.
+     */
+    setEdgeOpacity(opacity: number): void {
+        this.renderer.setEdgeOpacity(opacity);
+    }
+
+    /**
+     * Show or hide all labels (node + edge).
+     */
+    setLabelsVisible(visible: boolean): void {
+        this.renderer.setLabelsVisible(visible);
     }
 
     // =========================================================

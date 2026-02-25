@@ -26,6 +26,19 @@ interface DeleteModalState {
     label: string;
 }
 
+interface SettingsModalState {
+    open: boolean;
+    nodeSize: number;
+    edgeOpacity: number;
+    showLabels: boolean;
+    gravitationalConstant: number;
+    springLength: number;
+    springConstant: number;
+    centralGravity: number;
+    damping: number;
+    barnesHutTheta: number;
+}
+
 // ── Constants ──
 
 const NODE_TYPE_TAGS = ['person', 'movie', 'country', 'book'] as const;
@@ -34,6 +47,18 @@ const PALETTE_NAMES = ['default', 'vibrant', 'pastel', 'earthy', 'inferno', 'pla
 const LAYOUT_OPTS = {
     maxIterations: 1000,
 } as const;
+
+const DEFAULT_SETTINGS: Omit<SettingsModalState, 'open'> = {
+    nodeSize: 8,
+    edgeOpacity: 0.8,
+    showLabels: true,
+    gravitationalConstant: -0.25,
+    springLength: 0.2,
+    springConstant: 0.06,
+    centralGravity: 0.012,
+    damping: 0.18,
+    barnesHutTheta: 0.3,
+};
 
 const LIGHT_BG: [number, number, number, number] = [0.96, 0.96, 0.965, 1];
 const DARK_BG: [number, number, number, number] = [0.118, 0.122, 0.149, 1];
@@ -80,6 +105,10 @@ createApp({
         // Modals
         const editModal = reactive<EditModalState>({ open: false, nodeId: null, properties: {} });
         const deleteModal = reactive<DeleteModalState>({ open: false, nodeId: null, label: '' });
+        const settingsModal = reactive<SettingsModalState>({
+            open: false,
+            ...DEFAULT_SETTINGS,
+        });
 
         // Legend
         const legendItems = ref<LegendItem[]>([]);
@@ -209,6 +238,62 @@ createApp({
             updateCounts();
         }
 
+        // ── Settings ──
+
+        function getPhysicsOpts() {
+            return {
+                gravitationalConstant: settingsModal.gravitationalConstant,
+                springLength: settingsModal.springLength,
+                springConstant: settingsModal.springConstant,
+                centralGravity: settingsModal.centralGravity,
+                damping: settingsModal.damping,
+                barnesHutTheta: settingsModal.barnesHutTheta,
+                maxIterations: 1000,
+            };
+        }
+
+        function onSettingChange(key: string, event: Event): void {
+            const val = parseFloat((event.target as HTMLInputElement).value);
+            (settingsModal as any)[key] = val;
+
+            if (!g) return;
+
+            // Appearance — apply immediately
+            if (key === 'nodeSize') {
+                g.setNodeSize(val);
+            } else if (key === 'edgeOpacity') {
+                g.setEdgeOpacity(val);
+            }
+
+            // Physics — restart layout with new params
+            if (['gravitationalConstant', 'springLength', 'springConstant',
+                 'centralGravity', 'damping', 'barnesHutTheta'].includes(key)) {
+                if (layoutRunning.value) {
+                    g.stopLayout();
+                    g.startLayout(getPhysicsOpts());
+                }
+            }
+        }
+
+        function onToggleSetting(key: string): void {
+            if (key === 'showLabels') {
+                settingsModal.showLabels = !settingsModal.showLabels;
+                g?.setLabelsVisible(settingsModal.showLabels);
+            }
+        }
+
+        function resetSettings(): void {
+            Object.assign(settingsModal, DEFAULT_SETTINGS);
+            if (!g) return;
+            g.setNodeSize(DEFAULT_SETTINGS.nodeSize);
+            g.setEdgeOpacity(DEFAULT_SETTINGS.edgeOpacity);
+            g.setLabelsVisible(DEFAULT_SETTINGS.showLabels);
+            if (layoutRunning.value) {
+                g.stopLayout();
+                g.startLayout(getPhysicsOpts());
+            }
+        }
+
         // ── Init ──
 
         onMounted(async () => {
@@ -310,10 +395,11 @@ createApp({
             hasSelection,
             tooltipVisible, tooltipStyle, tooltipTag, tooltipName, tooltipProps, tooltipColor,
             legendItems, paletteNames,
-            editModal, deleteModal,
+            editModal, deleteModal, settingsModal,
             toggleLayout, fitView, resetGraph, toggleAnimated, toggleDarkMode,
             switchPalette, getPalettePreview,
             showEditModal, saveEdit, deleteSelected, confirmDelete,
+            onSettingChange, onToggleSetting, resetSettings,
         };
     },
 }).mount('#app');

@@ -76,6 +76,7 @@ export class Renderer {
     // State
     private initialized: boolean = false;
     private animationId: number = 0;
+    private labelsVisible: boolean = true;
 
     constructor(
         private graph: Graph,
@@ -517,7 +518,12 @@ export class Renderer {
         this.device.queue.submit([encoder.finish()]);
 
         // Render edges + labels on Canvas2D overlay
-        this.renderOverlay();
+        if (this.labelsVisible) {
+            this.renderOverlay();
+        } else if (this.labelCtx && this.labelCanvas) {
+            // Clear overlay when labels are hidden
+            this.labelCtx.clearRect(0, 0, this.labelCanvas.width, this.labelCanvas.height);
+        }
 
         // FPS
         this.frameCount++;
@@ -564,6 +570,21 @@ export class Renderer {
     /** Change background color at runtime */
     setBackground(color: [number, number, number, number]): void {
         this.backgroundColor = color;
+    }
+
+    /** Change node scale at runtime */
+    setNodeScale(scale: number): void {
+        this.nodeScale = scale;
+    }
+
+    /** Change edge opacity at runtime */
+    setEdgeOpacity(opacity: number): void {
+        this.edgeOpacity = opacity;
+    }
+
+    /** Show or hide all labels (node + edge) */
+    setLabelsVisible(visible: boolean): void {
+        this.labelsVisible = visible;
     }
 
     /** Set selection state for a node (1.0 = selected, 0.0 = not) */
@@ -644,17 +665,128 @@ export class Renderer {
             const positions = this.graph.positions;
             const sizes = this.graph.sizes;
 
+            const camZoomGlobal = Math.abs(this.camera.matrix[0]);
+
+            // ---- Pre-compute node screen positions & radii for overlap culling ----
+            const nodeScreenData: { sx: number; sy: number; r: number }[] = [];
             for (const id of this.graph.activeNodeIds()) {
                 const wx = positions[id * 2];
                 const wy = positions[id * 2 + 1];
                 const [sx, sy] = this.worldToCSS(wx, wy);
+                const nodeWorldSize = sizes[id] * this.nodeScale * 0.01;
+                const nodeScreenR = nodeWorldSize * camZoomGlobal * cw * 0.5;
+                nodeScreenData[id] = { sx, sy, r: nodeScreenR };
+            }
+
+            // ---- Edge labels (drawn FIRST so node labels paint over them) ----
+            const baseNodeWorldSize = this.nodeScale * 0.01;
+            const projectedNodeR = baseNodeWorldSize * camZoomGlobal * cw * 0.5;
+            const edgeWidthPx = Math.max(2.5, projectedNodeR * 1.0);
+
+            // Only show edge labels when node labels are visible.
+            // Node labels appear when nodeScreenR >= 16. Check any active node.
+            let anyNodeLabelVisible = false;
+            for (const id of this.graph.activeNodeIds()) {
+                if (nodeScreenData[id] && nodeScreenData[id].r >= 16) {
+                    anyNodeLabelVisible = true;
+                    break;
+                }
+            }
+
+            if (anyNodeLabelVisible) {
+                lctx.textAlign = 'center';
+                lctx.textBaseline = 'middle';
+
+                const edgeIndices = this.graph.edgeIndices;
+                const pos = this.graph.positions;
+
+                for (const eid of this.graph.activeEdgeIds()) {
+                    const src = edgeIndices[eid * 2];
+                    const tgt = edgeIndices[eid * 2 + 1];
+                    if (!this.graph.isNodeActive(src) || !this.graph.isNodeActive(tgt)) continue;
+
+                    const edge = this.graph.getEdge(eid);
+                    if (!edge || !edge.tag) continue;
+
+                    // Use the average screen radius of src and tgt nodes.
+                    // This is the CORRECT nodeScreenR (includes sizes[id] * nodeScale).
+                    const srcR = nodeScreenData[src]?.r ?? 0;
+                    const tgtR = nodeScreenData[tgt]?.r ?? 0;
+                    const avgNodeR = (srcR + tgtR) * 0.5;
+
+                    // Edge font = 65% of what the node label would be WITHOUT the 22px cap.
+                    // No cap on edge labels — they scale with zoom just like everything else.
+                    const edgeFontSize = Math.max(7, avgNodeR * 0.28 * 0.65);
+
+                    lctx.font = `500 ${edgeFontSize}px -apple-system,"Segoe UI",Helvetica,Arial,sans-serif`;
+                    lctx.fillStyle = 'rgba(160,155,175,0.85)';
+
+                    const labelOffset = edgeWidthPx * 0.5 + edgeFontSize * 0.55 + 3;
+
+                    // Midpoint in world coords
+                    const mx = (pos[src * 2] + pos[tgt * 2]) * 0.5;
+                    const my = (pos[src * 2 + 1] + pos[tgt * 2 + 1]) * 0.5;
+                    const [sx, sy] = this.worldToCSS(mx, my);
+
+                    if (sx < -80 || sx > cw + 80 || sy < -40 || sy > ch + 40) continue;
+
+                    // Compute edge angle for rotated text
+                    const [sx1, sy1] = this.worldToCSS(pos[src * 2], pos[src * 2 + 1]);
+                    const [sx2, sy2] = this.worldToCSS(pos[tgt * 2], pos[tgt * 2 + 1]);
+                    let angle = Math.atan2(sy2 - sy1, sx2 - sx1);
+
+                    if (angle > Math.PI / 2) angle -= Math.PI;
+                    if (angle < -Math.PI / 2) angle += Math.PI;
+
+                    const edgeLen = Math.hypot(sx2 - sx1, sy2 - sy1);
+                    if (edgeLen < 40) continue;
+
+                    // Skip if any part of the label overlaps any node circle.
+                    // Test the label's bounding box corners (rotated) against node circles.
+                    const textW = lctx.measureText(edge.tag).width * 0.5 + 4;
+                    const textH = edgeFontSize * 0.6 + 4;
+                    // Four corners of the label bbox relative to (sx, sy), rotated by angle
+                    const cosA = Math.cos(angle);
+                    const sinA = Math.sin(angle);
+                    const offY = -labelOffset;
+                    const corners = [
+                        { x: sx + cosA * (-textW) - sinA * (offY - textH), y: sy + sinA * (-textW) + cosA * (offY - textH) },
+                        { x: sx + cosA * ( textW) - sinA * (offY - textH), y: sy + sinA * ( textW) + cosA * (offY - textH) },
+                        { x: sx + cosA * ( textW) - sinA * (offY + textH), y: sy + sinA * ( textW) + cosA * (offY + textH) },
+                        { x: sx + cosA * (-textW) - sinA * (offY + textH), y: sy + sinA * (-textW) + cosA * (offY + textH) },
+                    ];
+                    let overlapsNode = false;
+                    for (const nid of this.graph.activeNodeIds()) {
+                        const nd = nodeScreenData[nid];
+                        if (!nd) continue;
+                        const rSq = nd.r * nd.r;
+                        for (const c of corners) {
+                            const dx = c.x - nd.sx;
+                            const dy = c.y - nd.sy;
+                            if (dx * dx + dy * dy < rSq) {
+                                overlapsNode = true;
+                                break;
+                            }
+                        }
+                        if (overlapsNode) break;
+                    }
+                    if (overlapsNode) continue;
+
+                    lctx.save();
+                    lctx.translate(sx, sy);
+                    lctx.rotate(angle);
+                    lctx.fillText(edge.tag, 0, -labelOffset);
+                    lctx.restore();
+                }
+            }
+
+            // ---- Node labels (drawn AFTER edge labels so they paint on top) ----
+            for (const id of this.graph.activeNodeIds()) {
+                const nd = nodeScreenData[id];
+                if (!nd) continue;
+                const { sx, sy, r: nodeScreenR } = nd;
 
                 if (sx < -60 || sx > cw + 60 || sy < -60 || sy > ch + 60) continue;
-
-                const nodeWorldSize = sizes[id] * this.nodeScale * 0.01;
-                const camZoom = Math.abs(this.camera.matrix[0]);
-                const nodeScreenR = nodeWorldSize * camZoom * cw * 0.5;
-
                 if (nodeScreenR < 16) continue;
 
                 const node = this.graph.getNode(id);
@@ -684,68 +816,6 @@ export class Renderer {
                 lctx.fillStyle = lum > 0.189 ? 'rgba(0,0,0,0.88)' : 'rgba(255,255,255,0.93)';
 
                 lctx.fillText(disp, sx, sy);
-            }
-
-            // ---- Edge labels ----
-            // Render edge tags at the midpoint of each edge, sized by zoom
-            const camZoomGlobal = Math.abs(this.camera.matrix[0]);
-            const edgeFontSize = Math.max(8, Math.min(camZoomGlobal * cw * 0.012, 16));
-
-            // Compute edge visual width in CSS pixels (mirrors shader logic)
-            // Edge width matches shader: 15% of projected node radius
-            const nodeWorldSize = this.nodeScale * 0.01;
-            const projectedNodeR = nodeWorldSize * camZoomGlobal * cw * 0.5;
-            const edgeWidthPx = Math.max(2.5, projectedNodeR * 1.0);
-
-            // Only render edge labels when zoomed in enough to read them
-            if (edgeFontSize >= 9) {
-                lctx.font = `500 ${edgeFontSize}px -apple-system,"Segoe UI",Helvetica,Arial,sans-serif`;
-                lctx.textAlign = 'center';
-                lctx.textBaseline = 'middle';
-                lctx.fillStyle = 'rgba(160,155,175,0.85)';
-
-                const edgeIndices = this.graph.edgeIndices;
-                const pos = this.graph.positions;
-
-                // Offset: half the rendered edge line width + comfortable gap + half font height
-                const labelOffset = edgeWidthPx * 0.5 + edgeFontSize * 0.55 + 3;
-
-                for (const eid of this.graph.activeEdgeIds()) {
-                    const src = edgeIndices[eid * 2];
-                    const tgt = edgeIndices[eid * 2 + 1];
-                    if (!this.graph.isNodeActive(src) || !this.graph.isNodeActive(tgt)) continue;
-
-                    const edge = this.graph.getEdge(eid);
-                    if (!edge || !edge.tag) continue;
-
-                    // Midpoint in world coords
-                    const mx = (pos[src * 2] + pos[tgt * 2]) * 0.5;
-                    const my = (pos[src * 2 + 1] + pos[tgt * 2 + 1]) * 0.5;
-                    const [sx, sy] = this.worldToCSS(mx, my);
-
-                    // Skip off-screen labels
-                    if (sx < -80 || sx > cw + 80 || sy < -40 || sy > ch + 40) continue;
-
-                    // Compute edge angle for rotated text
-                    const [sx1, sy1] = this.worldToCSS(pos[src * 2], pos[src * 2 + 1]);
-                    const [sx2, sy2] = this.worldToCSS(pos[tgt * 2], pos[tgt * 2 + 1]);
-                    let angle = Math.atan2(sy2 - sy1, sx2 - sx1);
-
-                    // Keep text readable (never upside down)
-                    if (angle > Math.PI / 2) angle -= Math.PI;
-                    if (angle < -Math.PI / 2) angle += Math.PI;
-
-                    // Skip very short edges where label won't fit
-                    const edgeLen = Math.hypot(sx2 - sx1, sy2 - sy1);
-                    if (edgeLen < 40) continue;
-
-                    lctx.save();
-                    lctx.translate(sx, sy);
-                    lctx.rotate(angle);
-                    // Offset above the edge line, accounting for edge visual thickness
-                    lctx.fillText(edge.tag, 0, -labelOffset);
-                    lctx.restore();
-                }
             }
 
             lctx.restore();
