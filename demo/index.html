@@ -1,151 +1,151 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-	<meta charset="UTF-8">
-	<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-	<title>graphGPU — Demo</title>
-	<link rel="preconnect" href="https://fonts.googleapis.com">
-	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-	<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
-	<script src="https://unpkg.com/phosphor-icons"></script>
-	<link rel="stylesheet" href="/src/style.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>graphGPU — Demo</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/phosphor-icons"></script>
+  <link rel="stylesheet" href="/src/style.scss">
 </head>
 <body>
-	<div id="app">
-		<!-- TOOLBAR -->
-		<div class="toolbar" :class="{ light: !darkMode }">
-			<div class="brand"><span class="dot"></span> graphGPU</div>
-			<div class="sep"></div>
-			<button class="btn" :class="{ active: layoutRunning }" @click="toggleLayout">
-				<i :class="layoutRunning ? 'ph-pause-bold' : 'ph-play-bold'"></i>
-				{{ layoutRunning ? 'pause' : 'layout' }}
-			</button>
-			<button class="btn" @click="fitView"><i class="ph-arrows-out-bold"></i> fit</button>
-			<button class="btn" @click="resetGraph"><i class="ph-arrow-counter-clockwise-bold"></i> reset</button>
-			<div class="sep"></div>
-			<button class="btn" :class="{ active: gravityEnabled }" @click="toggleGravity">
-				<i class="ph-magnet-bold"></i> pull
-			</button>
-			<div class="sep"></div>
-			<button class="btn" @click="toggleDarkMode">
-				<i :class="darkMode ? 'ph-sun-bold' : 'ph-moon-bold'"></i>
-				{{ darkMode ? 'light' : 'dark' }}
-			</button>
-			<div class="spacer"></div>
-			<div class="stats"><b>{{ nodeCount }}</b> nodes · <b>{{ edgeCount }}</b> edges</div>
-		</div>
-
-		<!-- CANVAS CONTAINER (label overlay attaches here) -->
-		<div class="canvas-container" :class="{ light: !darkMode }">
-			<canvas id="graph-canvas"></canvas>
-		</div>
-
-		<!-- CONTEXT PANEL -->
-		<div class="context-panel" :class="{ hidden: !hasSelection }">
-			<div class="ctx-btn green" title="Edit node" @click="showEditModal"><i class="ph-pencil-fill"></i></div>
-			<div class="ctx-btn" title="Fit to view" @click="fitView"><i class="ph-arrows-out-fill"></i></div>
-			<div class="ctx-sep"></div>
-			<div class="ctx-btn red" title="Delete node" @click="deleteSelected"><i class="ph-trash-fill"></i></div>
-		</div>
-
-		<!-- PALETTE BAR -->
-		<div class="palette-bar">
-			<div v-for="name in paletteNames" :key="name"
-					 class="palette-swatch"
-					 :class="{ active: activePalette === name }"
-					 :title="name"
-					 :style="{ background: getPalettePreview(name) }"
-					 @click="switchPalette(name)">
-			</div>
-		</div>
-
-		<!-- LEGEND -->
-		<div class="legend" :class="{ light: !darkMode }">
-			<div class="legend-item" v-for="item in legendItems" :key="item.tag">
-				<div class="legend-dot" :style="{ background: item.color }"></div>
-				{{ item.tag }}
-			</div>
-		</div>
-
-		<!-- STATUS BAR -->
-		<div class="statusbar" :class="{ light: !darkMode }">
-			<template v-if="selectedNode">
-				<span class="tag" :style="{ background: selectedNodeColor }">{{ selectedNode.tag }}</span>
-				<div class="props">
-					<div class="prop" v-for="(val, key) in selectedNode.properties" :key="key">
-						<b>{{ key }}:</b> <span>{{ val }}</span>
-					</div>
-				</div>
-			</template>
-			<template v-else-if="hoveredNode">
-				<span class="tag" :style="{ background: hoveredNodeColor }">{{ hoveredNode.tag }}</span>
-				<div class="props">
-					<div class="prop" v-for="(val, key) in hoveredNode.properties" :key="key">
-						<b>{{ key }}:</b> <span>{{ val }}</span>
-					</div>
-				</div>
-			</template>
-			<template v-else>
-				<span class="idle-text">{{ nodeCount }} node{{ nodeCount !== 1 ? 's' : '' }} · {{ edgeCount }} edge{{ edgeCount !== 1 ? 's' : '' }}</span>
-			</template>
-			<div class="spacer"></div>
-			<span class="badge">WebGPU</span>
-		</div>
-
-		<!-- TOOLTIP -->
-		<div class="tooltip" :class="{ visible: tooltipVisible }" :style="tooltipStyle">
-			<div class="tt-tag" :style="{ color: tooltipColor }">{{ tooltipTag }}</div>
-			<div class="tt-name">{{ tooltipName }}</div>
-			<div class="tt-props" v-if="tooltipProps">{{ tooltipProps }}</div>
-		</div>
-
-		<!-- EDIT MODAL -->
-		<div class="modal-overlay" v-if="editModal.open" @click.self="editModal.open = false">
-			<div class="modal-card" :class="{ light: !darkMode }">
-				<div class="modal-head">
-					<span>Edit Node</span>
-					<button class="close" @click="editModal.open = false">&times;</button>
-				</div>
-				<div class="modal-body">
-					<div class="field-row" v-for="(val, key) in editModal.properties" :key="key">
-						<label>{{ key }}</label>
-						<input v-model="editModal.properties[key]" />
-					</div>
-				</div>
-				<div class="modal-foot">
-					<button class="btn-cancel" @click="editModal.open = false">Cancel</button>
-					<button class="btn-save" @click="saveEdit">Save</button>
-				</div>
-			</div>
-		</div>
-
-		<!-- DELETE CONFIRM -->
-		<div class="modal-overlay" v-if="deleteModal.open" @click.self="deleteModal.open = false">
-			<div class="modal-card" :class="{ light: !darkMode }">
-				<div class="modal-head">
-					<span>Delete Node</span>
-					<button class="close" @click="deleteModal.open = false">&times;</button>
-				</div>
-				<div class="modal-body">
-					<p class="confirm-text">
-						Delete <b>{{ deleteModal.label }}</b>?
-						This will also remove all connected edges.
-					</p>
-				</div>
-				<div class="modal-foot">
-					<button class="btn-cancel" @click="deleteModal.open = false">Cancel</button>
-					<button class="btn-danger" @click="confirmDelete">Delete</button>
-				</div>
-			</div>
-		</div>
+  <div id="app">
+	<!-- TOOLBAR -->
+	<div class="toolbar" :class="{ light: !darkMode }">
+	  <div class="brand"><span class="dot"></span> graphGPU</div>
+	  <div class="sep"></div>
+	  <button class="btn" :class="{ active: layoutRunning }" @click="toggleLayout">
+		<i :class="layoutRunning ? 'ph-pause-bold' : 'ph-play-bold'"></i>
+		{{ layoutRunning ? 'pause' : 'layout' }}
+	  </button>
+	  <button class="btn" @click="fitView"><i class="ph-arrows-out-bold"></i> fit</button>
+	  <button class="btn" @click="resetGraph"><i class="ph-arrow-counter-clockwise-bold"></i> reset</button>
+	  <div class="sep"></div>
+	  <button class="btn" :class="{ active: gravityEnabled }" @click="toggleGravity">
+		<i class="ph-magnet-bold"></i> pull
+	  </button>
+	  <div class="sep"></div>
+	  <button class="btn" @click="toggleDarkMode">
+		<i :class="darkMode ? 'ph-sun-bold' : 'ph-moon-bold'"></i>
+		{{ darkMode ? 'light' : 'dark' }}
+	  </button>
+	  <div class="spacer"></div>
+	  <div class="stats"><b>{{ nodeCount }}</b> nodes · <b>{{ edgeCount }}</b> edges</div>
 	</div>
 
-	<div class="fallback" id="fallback">
-		<h2>WebGPU Not Available</h2>
-		<p>This demo requires WebGPU. Try <strong>Chrome 113+</strong>, <strong>Edge 113+</strong>, or <strong>Safari 18+</strong>.</p>
+	<!-- CANVAS CONTAINER (label overlay attaches here) -->
+	<div class="canvas-container" :class="{ light: !darkMode }">
+	  <canvas id="graph-canvas"></canvas>
 	</div>
 
-	<script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.prod.js"></script>
-	<script type="module" src="/src/main.ts"></script>
+	<!-- CONTEXT PANEL -->
+	<div class="context-panel" :class="{ hidden: !hasSelection }">
+	  <div class="ctx-btn green" title="Edit node" @click="showEditModal"><i class="ph-pencil-fill"></i></div>
+	  <div class="ctx-btn" title="Fit to view" @click="fitView"><i class="ph-arrows-out-fill"></i></div>
+	  <div class="ctx-sep"></div>
+	  <div class="ctx-btn red" title="Delete node" @click="deleteSelected"><i class="ph-trash-fill"></i></div>
+	</div>
+
+	<!-- PALETTE BAR -->
+	<div class="palette-bar">
+	  <div v-for="name in paletteNames" :key="name"
+		   class="palette-swatch"
+		   :class="{ active: activePalette === name }"
+		   :title="name"
+		   :style="{ background: getPalettePreview(name) }"
+		   @click="switchPalette(name)">
+	  </div>
+	</div>
+
+	<!-- LEGEND -->
+	<div class="legend" :class="{ light: !darkMode }">
+	  <div class="legend-item" v-for="item in legendItems" :key="item.tag">
+		<div class="legend-dot" :style="{ background: item.color }"></div>
+		{{ item.tag }}
+	  </div>
+	</div>
+
+	<!-- STATUS BAR -->
+	<div class="statusbar" :class="{ light: !darkMode }">
+	  <template v-if="selectedNode">
+		<span class="tag" :style="{ background: selectedNodeColor }">{{ selectedNode.tag }}</span>
+		<div class="props">
+		  <div class="prop" v-for="(val, key) in selectedNode.properties" :key="key">
+			<b>{{ key }}:</b> <span>{{ val }}</span>
+		  </div>
+		</div>
+	  </template>
+	  <template v-else-if="hoveredNode">
+		<span class="tag" :style="{ background: hoveredNodeColor }">{{ hoveredNode.tag }}</span>
+		<div class="props">
+		  <div class="prop" v-for="(val, key) in hoveredNode.properties" :key="key">
+			<b>{{ key }}:</b> <span>{{ val }}</span>
+		  </div>
+		</div>
+	  </template>
+	  <template v-else>
+		<span class="idle-text">{{ nodeCount }} node{{ nodeCount !== 1 ? 's' : '' }} · {{ edgeCount }} edge{{ edgeCount !== 1 ? 's' : '' }}</span>
+	  </template>
+	  <div class="spacer"></div>
+	  <span class="badge">WebGPU</span>
+	</div>
+
+	<!-- TOOLTIP -->
+	<div class="tooltip" :class="{ visible: tooltipVisible }" :style="tooltipStyle">
+	  <div class="tt-tag" :style="{ color: tooltipColor }">{{ tooltipTag }}</div>
+	  <div class="tt-name">{{ tooltipName }}</div>
+	  <div class="tt-props" v-if="tooltipProps">{{ tooltipProps }}</div>
+	</div>
+
+	<!-- EDIT MODAL -->
+	<div class="modal-overlay" v-if="editModal.open" @click.self="editModal.open = false">
+	  <div class="modal-card" :class="{ light: !darkMode }">
+		<div class="modal-head">
+		  <span>Edit Node</span>
+		  <button class="close" @click="editModal.open = false">&times;</button>
+		</div>
+		<div class="modal-body">
+		  <div class="field-row" v-for="(val, key) in editModal.properties" :key="key">
+			<label>{{ key }}</label>
+			<input v-model="editModal.properties[key]" />
+		  </div>
+		</div>
+		<div class="modal-foot">
+		  <button class="btn-cancel" @click="editModal.open = false">Cancel</button>
+		  <button class="btn-save" @click="saveEdit">Save</button>
+		</div>
+	  </div>
+	</div>
+
+	<!-- DELETE CONFIRM -->
+	<div class="modal-overlay" v-if="deleteModal.open" @click.self="deleteModal.open = false">
+	  <div class="modal-card" :class="{ light: !darkMode }">
+		<div class="modal-head">
+		  <span>Delete Node</span>
+		  <button class="close" @click="deleteModal.open = false">&times;</button>
+		</div>
+		<div class="modal-body">
+		  <p class="confirm-text">
+			Delete <b>{{ deleteModal.label }}</b>?
+			This will also remove all connected edges.
+		  </p>
+		</div>
+		<div class="modal-foot">
+		  <button class="btn-cancel" @click="deleteModal.open = false">Cancel</button>
+		  <button class="btn-danger" @click="confirmDelete">Delete</button>
+		</div>
+	  </div>
+	</div>
+  </div>
+
+  <div class="fallback" id="fallback">
+	<h2>WebGPU Not Available</h2>
+	<p>This demo requires WebGPU. Try <strong>Chrome 113+</strong>, <strong>Edge 113+</strong>, or <strong>Safari 18+</strong>.</p>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.prod.js"></script>
+  <script type="module" src="/src/main.ts"></script>
 </body>
 </html>
