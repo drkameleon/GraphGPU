@@ -214,7 +214,11 @@ async function main() {
     function refreshLegend() {
         legendEl.innerHTML = '';
         const tagColors = g.getTagColors();
+        // Only show node-type tags in the legend (person, movie, etc.)
+        // Edge relationship tags (directed, actedIn, etc.) are shown as edge labels
+        const nodeTypeTags = new Set(['person', 'movie', 'country', 'book']);
         for (const [tag, { bg }] of tagColors) {
+            if (!nodeTypeTags.has(tag)) continue;
             const hex = `rgb(${Math.round(bg[0]*255)},${Math.round(bg[1]*255)},${Math.round(bg[2]*255)})`;
             const item = document.createElement('div');
             item.className = 'legend-item';
@@ -291,8 +295,20 @@ async function main() {
 
     btnFit.addEventListener('click', () => g.fitView(0.15));
     btnReset.addEventListener('click', () => {
+        // Stop current layout if running
+        if (layoutRunning) {
+            g.stopLayout();
+        }
+        // Re-randomize all node positions
+        g.resetPositions();
+        // Restart layout so the graph re-forms organically
+        g.startLayout({ repulsion: 1.2, attraction: 0.015, gravity: 0.12, damping: 0.9, maxIterations: 400 });
+        layoutRunning = true;
+        btnLayout.classList.add('active');
+        btnLayout.textContent = '⟳ layout';
+        // Reset camera and fit after layout settles
         g.resetView();
-        g.fitView(0.15);
+        setTimeout(() => g.fitView(0.15), 1500);
     });
 
     // Background toggle: dark ↔ light
