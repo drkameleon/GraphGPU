@@ -94,13 +94,18 @@ fn fs_node(in: VSOut) -> @location(0) vec4f {
   let borderMask = smoothstep(borderStart - aa, borderStart, dist);
   finalColor = mix(finalColor, baseColor * 0.6, borderMask * 0.4);
 
-  // Selection: contrast-adaptive outline ring in the expanded area
+  // Selection: ring outline using node's own color, shifted for contrast
   if (in.selection > 0.5) {
     let innerR = 1.0 / (1.0 + 0.15);  // matches haloExpand
     let ring = smoothstep(innerR - aa, innerR, dist) * smoothstep(1.0, 1.0 - aa * 2.0, dist);
-    // Choose halo color based on node brightness: dark halo on light nodes, light on dark
+    // Darken for light theme, lighten for dark theme (based on node luminance)
     let lum = dot(baseColor, vec3f(0.2126, 0.7152, 0.0722));
-    let haloColor = select(vec3f(1.0, 1.0, 1.0), vec3f(0.1, 0.1, 0.15), lum > 0.45);
+    let haloColor = select(
+      baseColor * 1.6 + 0.15,    // lighten: bright node color for dark backgrounds
+      baseColor * 0.45,           // darken: deeper version for light backgrounds
+      lum > 0.45
+    );
+    haloColor = clamp(haloColor, vec3f(0.0), vec3f(1.0));
     finalColor = mix(finalColor, haloColor, ring);
   }
 
