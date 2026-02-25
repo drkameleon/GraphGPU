@@ -587,6 +587,11 @@ export class Renderer {
         this.labelsVisible = visible;
     }
 
+    /** Get current FPS */
+    getFps(): number {
+        return this.currentFps;
+    }
+
     /** Set selection state for a node (1.0 = selected, 0.0 = not) */
     setSelection(nodeId: number, selected: boolean): void {
         if (this.selectionData.length <= nodeId) {
