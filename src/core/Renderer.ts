@@ -736,17 +736,34 @@ export class Renderer {
                     const labelX = sx + perpX;
                     const labelY = sy - Math.abs(perpY);
 
-                    // Skip if label center overlaps any node circle
+                    // Skip if any part of the label overlaps any node circle.
+                    // Test the label's bounding box corners (rotated) against node circles.
+                    const textW = lctx.measureText(edge.tag).width * 0.5 + 4;
+                    const textH = edgeFontSize * 0.6 + 4;
+                    // Four corners of the label bbox relative to (sx, sy), rotated by angle
+                    const cosA = Math.cos(angle);
+                    const sinA = Math.sin(angle);
+                    const offY = -labelOffset;
+                    const corners = [
+                        { x: sx + cosA * (-textW) - sinA * (offY - textH), y: sy + sinA * (-textW) + cosA * (offY - textH) },
+                        { x: sx + cosA * ( textW) - sinA * (offY - textH), y: sy + sinA * ( textW) + cosA * (offY - textH) },
+                        { x: sx + cosA * ( textW) - sinA * (offY + textH), y: sy + sinA * ( textW) + cosA * (offY + textH) },
+                        { x: sx + cosA * (-textW) - sinA * (offY + textH), y: sy + sinA * (-textW) + cosA * (offY + textH) },
+                    ];
                     let overlapsNode = false;
                     for (const nid of this.graph.activeNodeIds()) {
                         const nd = nodeScreenData[nid];
                         if (!nd) continue;
-                        const dx = labelX - nd.sx;
-                        const dy = labelY - nd.sy;
-                        if (dx * dx + dy * dy < nd.r * nd.r) {
-                            overlapsNode = true;
-                            break;
+                        const rSq = nd.r * nd.r;
+                        for (const c of corners) {
+                            const dx = c.x - nd.sx;
+                            const dy = c.y - nd.sy;
+                            if (dx * dx + dy * dy < rSq) {
+                                overlapsNode = true;
+                                break;
+                            }
                         }
+                        if (overlapsNode) break;
                     }
                     if (overlapsNode) continue;
 
