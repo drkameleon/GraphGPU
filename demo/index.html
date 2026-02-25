@@ -31,10 +31,20 @@
         <i :class="darkMode ? 'ph-sun-bold' : 'ph-moon-bold'"></i>
         {{ darkMode ? 'light' : 'dark' }}
       </button>
+      <div class="sep"></div>
+      <button class="btn" @click="stressTest">
+        <i class="ph-lightning-bold"></i> stress test
+      </button>
       <div class="spacer"></div>
       <button class="btn" @click="settingsModal.open = true">
         <i class="ph-sliders-horizontal-bold"></i> settings
       </button>
+    </div>
+
+    <!-- FPS OVERLAY -->
+    <div class="fps-overlay" v-if="settingsModal.showFps">
+      <div class="fps-line"><b>{{ fpsDisplay.fps }}</b> fps</div>
+      <div class="fps-line">{{ fpsDisplay.nodes }} nodes · {{ fpsDisplay.edges }} edges</div>
     </div>
 
     <!-- CANVAS CONTAINER (label overlay attaches here) -->
@@ -181,7 +191,6 @@
                 </button>
               </div>
             </div>
-          </div>
 
           <div class="settings-section">
             <div class="settings-section-title">Physics</div>
