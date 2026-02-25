@@ -114,6 +114,13 @@ fn fs_node(in: VSOut) -> @location(0) vec4f {
 
 /**
  * Edge shader - instanced quads between node pairs.
+ *
+ * FIX: The perpendicular vector is now computed in screen-space
+ * (aspect-corrected) so that edge width is uniform regardless of
+ * the edge's angle.  Previously, the perpendicular was computed
+ * directly in NDC, where X and Y have different scales (due to
+ * aspectRatio), causing horizontal and vertical edges to appear
+ * at different widths.
  */
 export const EDGE_SHADER = /* wgsl */ `
 
@@ -166,12 +173,19 @@ fn vs_edge(
 
   let srcProj = applyCamera(srcPos);
   let tgtProj = applyCamera(tgtPos);
-  let dir = tgtProj - srcProj;
-  let len = length(dir);
 
   var out: VSOut;
 
-  if (len < 0.0001) {
+  // ── Compute perpendicular in screen-space to fix aspect distortion ──
+  let aspect = frame.viewport.x / frame.viewport.y;
+
+  // Stretch NDC → square screen-space
+  let screenSrc = vec2f(srcProj.x * aspect, srcProj.y);
+  let screenTgt = vec2f(tgtProj.x * aspect, tgtProj.y);
+  let screenDir = screenTgt - screenSrc;
+  let screenLen = length(screenDir);
+
+  if (screenLen < 0.0001) {
     out.position = vec4f(srcProj, 0.0, 1.0);
     out.alpha = 0.0;
     out.vEdge = 0.0;
@@ -179,17 +193,20 @@ fn vs_edge(
     return out;
   }
 
-  let fwd = dir / len;
-  let perp = vec2f(-fwd.y, fwd.x);
+  let screenFwd = screenDir / screenLen;
+  let screenPerp = vec2f(-screenFwd.y, screenFwd.x);
 
-  // Width: equal to projected node radius (deliberately oversized for testing)
+  // Convert perpendicular back to NDC space
+  let ndcPerp = vec2f(screenPerp.x / aspect, screenPerp.y);
+
+  // Width: based on projected node radius
   let cameraZoom = length(vec2f(frame.camera.col0.x, frame.camera.col0.y));
   let nodeWorldSize = frame.nodeScale * 0.01;
   let projectedNodeR = nodeWorldSize * cameraZoom;
   let minWidth = 2.5 / frame.viewport.y;
   let w = max(minWidth, projectedNodeR * 1.0);
 
-  let pos = mix(srcProj, tgtProj, t) + perp * s * w;
+  let pos = mix(srcProj, tgtProj, t) + ndcPerp * s * w;
 
   out.position = vec4f(pos, 0.0, 1.0);
   out.alpha = alpha * frame.edgeOpacity;
