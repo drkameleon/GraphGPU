@@ -106,24 +106,42 @@ export class GraphGPU {
 
     /**
      * Add a node to the graph.
-     * Inspired by graphGPU's `put` command.
+     * Inspired by Grafito's `put` command.
+     *
+     * Supports two calling conventions:
+     *   g.put('person', 'Alice', { role: 'engineer' })  // tag, label, properties
+     *   g.put('person', { name: 'Alice', role: 'engineer' })  // tag, properties
      *
      * @example
-     *   const john = g.put('person', { name: 'John', age: 30 });
+     *   const alice = g.put('person', 'Alice', { role: 'engineer' });
+     *   const bob   = g.put('person', { name: 'Bob', role: 'designer' });
      */
-    put(tag: string, properties?: Record<string, unknown>, opts?: {
-        x?: number;
-        y?: number;
-        size?: number;
-        color?: string;
+    put(tag: string, labelOrProps?: string | Record<string, unknown>, propsOrOpts?: Record<string, unknown> | {
+        x?: number; y?: number; size?: number; color?: string;
+    }, opts?: {
+        x?: number; y?: number; size?: number; color?: string;
     }): NodeId {
+        let properties: Record<string, unknown> | undefined;
+        let renderOpts: { x?: number; y?: number; size?: number; color?: string } | undefined;
+
+        if (typeof labelOrProps === 'string') {
+            // put(tag, label, properties?, opts?)
+            properties = (propsOrOpts as Record<string, unknown>) ?? {};
+            properties = { name: labelOrProps, ...properties };
+            renderOpts = opts;
+        } else {
+            // put(tag, properties?, opts?)
+            properties = labelOrProps;
+            renderOpts = propsOrOpts as { x?: number; y?: number; size?: number; color?: string } | undefined;
+        }
+
         return this.graph.addNode({
             tag,
             properties,
-            x: opts?.x,
-            y: opts?.y,
-            size: opts?.size,
-            color: opts?.color,
+            x: renderOpts?.x,
+            y: renderOpts?.y,
+            size: renderOpts?.size,
+            color: renderOpts?.color,
         });
     }
 
