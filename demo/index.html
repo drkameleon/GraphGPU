@@ -32,6 +32,9 @@
         {{ darkMode ? 'light' : 'dark' }}
       </button>
       <div class="spacer"></div>
+      <button class="btn" @click="settingsModal.open = true">
+        <i class="ph-sliders-horizontal-bold"></i> settings
+      </button>
     </div>
 
     <!-- CANVAS CONTAINER (label overlay attaches here) -->
@@ -134,6 +137,109 @@
         <div class="modal-foot">
           <button class="btn-cancel" @click="deleteModal.open = false">Cancel</button>
           <button class="btn-danger" @click="confirmDelete">Delete</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- SETTINGS MODAL -->
+    <div class="modal-overlay" v-if="settingsModal.open" @click.self="settingsModal.open = false">
+      <div class="modal-card settings-card" :class="{ light: !darkMode }">
+        <div class="modal-head">
+          <span><i class="ph-sliders-horizontal-bold"></i> Settings</span>
+          <button class="close" @click="settingsModal.open = false">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="settings-section">
+            <div class="settings-section-title">Appearance</div>
+
+            <div class="setting-row">
+              <label>Node size</label>
+              <div class="slider-group">
+                <input type="range" min="2" max="20" step="0.5"
+                       :value="settingsModal.nodeSize"
+                       @input="onSettingChange('nodeSize', $event)" />
+                <span class="slider-val">{{ settingsModal.nodeSize }}</span>
+              </div>
+            </div>
+
+            <div class="setting-row">
+              <label>Edge opacity</label>
+              <div class="slider-group">
+                <input type="range" min="0.01" max="1" step="0.01"
+                       :value="settingsModal.edgeOpacity"
+                       @input="onSettingChange('edgeOpacity', $event)" />
+                <span class="slider-val">{{ settingsModal.edgeOpacity }}</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <div class="settings-section-title">Physics</div>
+
+            <div class="setting-row">
+              <label>Repulsion</label>
+              <div class="slider-group">
+                <input type="range" min="-2" max="0" step="0.01"
+                       :value="settingsModal.gravitationalConstant"
+                       @input="onSettingChange('gravitationalConstant', $event)" />
+                <span class="slider-val">{{ settingsModal.gravitationalConstant }}</span>
+              </div>
+            </div>
+
+            <div class="setting-row">
+              <label>Spring length</label>
+              <div class="slider-group">
+                <input type="range" min="0.05" max="1" step="0.01"
+                       :value="settingsModal.springLength"
+                       @input="onSettingChange('springLength', $event)" />
+                <span class="slider-val">{{ settingsModal.springLength }}</span>
+              </div>
+            </div>
+
+            <div class="setting-row">
+              <label>Spring stiffness</label>
+              <div class="slider-group">
+                <input type="range" min="0.01" max="0.3" step="0.005"
+                       :value="settingsModal.springConstant"
+                       @input="onSettingChange('springConstant', $event)" />
+                <span class="slider-val">{{ settingsModal.springConstant }}</span>
+              </div>
+            </div>
+
+            <div class="setting-row">
+              <label>Central gravity</label>
+              <div class="slider-group">
+                <input type="range" min="0" max="0.1" step="0.001"
+                       :value="settingsModal.centralGravity"
+                       @input="onSettingChange('centralGravity', $event)" />
+                <span class="slider-val">{{ settingsModal.centralGravity }}</span>
+              </div>
+            </div>
+
+            <div class="setting-row">
+              <label>Damping</label>
+              <div class="slider-group">
+                <input type="range" min="0.01" max="0.5" step="0.01"
+                       :value="settingsModal.damping"
+                       @input="onSettingChange('damping', $event)" />
+                <span class="slider-val">{{ settingsModal.damping }}</span>
+              </div>
+            </div>
+
+            <div class="setting-row">
+              <label>Barnes-Hut θ</label>
+              <div class="slider-group">
+                <input type="range" min="0" max="1.5" step="0.05"
+                       :value="settingsModal.barnesHutTheta"
+                       @input="onSettingChange('barnesHutTheta', $event)" />
+                <span class="slider-val">{{ settingsModal.barnesHutTheta }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn-cancel" @click="resetSettings">Reset defaults</button>
+          <button class="btn-save" @click="settingsModal.open = false">Done</button>
         </div>
       </div>
     </div>
