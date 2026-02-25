@@ -315,10 +315,13 @@ export class GraphGPU {
      * Falls back to CPU layout if GPU compute unavailable.
      */
     async startGPULayout(opts?: {
-        repulsion?: number;
-        attraction?: number;
-        gravity?: number;
+        gravitationalConstant?: number;
+        springLength?: number;
+        springConstant?: number;
+        centralGravity?: number;
         damping?: number;
+        timestep?: number;
+        maxVelocity?: number;
         stepsPerFrame?: number;
         maxIterations?: number;
     }): Promise<void> {

@@ -219,7 +219,7 @@ createApp({
                 canvas,
                 palette: 'vibrant',
                 nodeSize: 8,
-                edgeOpacity: 0.65,
+                edgeOpacity: 0.8,
                 antialias: true,
                 background: LIGHT_BG,
                 interaction: {

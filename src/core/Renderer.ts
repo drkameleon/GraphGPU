@@ -18,7 +18,7 @@ import { parseColor } from '../utils/color';
 // NodeUniforms: camera (3×vec4) + viewport (vec2) + time (f32) + nodeScale (f32)
 const NODE_UNIFORM_SIZE = 4 * (12 + 2 + 1 + 1); // 64 bytes
 
-// EdgeUniforms: camera (3×vec4) + viewport (vec2) + time (f32) + edgeOpacity (f32)
+// EdgeUniforms: camera (3×vec4) + viewport (vec2) + edgeOpacity (f32) + nodeScale (f32)
 const EDGE_UNIFORM_SIZE = 4 * (12 + 2 + 1 + 1); // 64 bytes
 
 export class Renderer {
@@ -455,8 +455,9 @@ export class Renderer {
 
         this.device.queue.writeBuffer(this.nodeUniformBuffer, 0, uniforms);
 
-        // Edge uniforms (same camera + different last float)
-        uniforms[15] = this.edgeOpacity;
+        // Edge uniforms: same camera/viewport, but edgeOpacity + nodeScale in last 2 slots
+        uniforms[14] = this.edgeOpacity;
+        uniforms[15] = this.nodeScale;
         this.device.queue.writeBuffer(this.edgeUniformBuffer, 0, uniforms);
 
         // Begin render pass
@@ -691,9 +692,10 @@ export class Renderer {
             const edgeFontSize = Math.max(8, Math.min(camZoomGlobal * cw * 0.012, 16));
 
             // Compute edge visual width in CSS pixels (mirrors shader logic)
-            const minEdgeW = 2.5; // matches shader minWidth in px
-            const zoomEdgeW = 0.0038 * camZoomGlobal * cw * 0.5; // matches shader zoomWidth → CSS px
-            const edgeWidthPx = Math.max(minEdgeW, zoomEdgeW);
+            // Edge width matches shader: 15% of projected node radius
+            const nodeWorldSize = this.nodeScale * 0.01;
+            const projectedNodeR = nodeWorldSize * camZoomGlobal * cw * 0.5;
+            const edgeWidthPx = Math.max(1.5, projectedNodeR * 0.15);
 
             // Only render edge labels when zoomed in enough to read them
             if (edgeFontSize >= 9) {
