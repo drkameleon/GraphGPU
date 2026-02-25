@@ -182,6 +182,18 @@ export class Graph {
         this.nodeProperties[id] = undefined!;
 
         this.freeNodes.push(id);
+
+        // Shrink nodeCount if we deleted from the tail
+        // This avoids iterating/uploading dead trailing slots
+        while (this.nodeCount > 0 && this.nodeTags[this.nodeCount - 1] === undefined) {
+            this.nodeCount--;
+        }
+        // Remove any free-list entries that are now beyond nodeCount
+        // (they'll be naturally reassigned by addNode's sequential path)
+        if (this.freeNodes.length > 0) {
+            this.freeNodes = this.freeNodes.filter(fid => fid < this.nodeCount);
+        }
+
         this.dirtyNodes = true;
     }
 
@@ -290,6 +302,15 @@ export class Graph {
         this.edgeProperties[id] = undefined!;
 
         this.freeEdges.push(id);
+
+        // Shrink edgeCount if we deleted from the tail
+        while (this.edgeCount > 0 && this.edgeTags[this.edgeCount - 1] === undefined) {
+            this.edgeCount--;
+        }
+        if (this.freeEdges.length > 0) {
+            this.freeEdges = this.freeEdges.filter(fid => fid < this.edgeCount);
+        }
+
         this.dirtyEdges = true;
     }
 
