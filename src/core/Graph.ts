@@ -489,6 +489,16 @@ export class Graph {
         this.dirtyEdges = true;
     }
 
+    /** Re-randomize positions of all active nodes (for layout restart) */
+    resetPositions(): void {
+        for (const id of this.activeNodeIds()) {
+            this.positions[id * 2] = (Math.random() - 0.5) * 2;
+            this.positions[id * 2 + 1] = (Math.random() - 0.5) * 2;
+        }
+        this.dirtyNodes = true;
+        this.dirtyEdges = true; // edges depend on node positions
+    }
+
     // =========================================================
     // Internal: buffer growth
     // =========================================================
