@@ -149,6 +149,19 @@ describe('ForceLayout: physics', () => {
         }
     });
 
+    it('separates nodes placed at the same position', () => {
+        for (const theta of [0, 0.5]) {
+            const g = new Graph();
+            const a = g.addNode({ tag: 'n', x: 0.2, y: 0.2 });
+            const b = g.addNode({ tag: 'n', x: 0.2, y: 0.2 });
+            g.addNode({ tag: 'n', x: -0.4, y: 0.1 });
+
+            expect(() => new ForceLayout(g, { type: 'force', barnesHutTheta: theta }).step(20)).not.toThrow();
+            expect(nodeDistance(g, a, b)).toBeGreaterThan(0.01);
+            for (const v of g.positions.subarray(0, 6)) expect(Number.isFinite(v)).toBe(true);
+        }
+    });
+
     it('marks the graph dirty after a step', () => {
         const g = randomGraph(10, 10);
         g.dirtyNodes = false;
