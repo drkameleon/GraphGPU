@@ -228,6 +228,24 @@ src/
 Anything you notice or want to suggest, just [open an issue](https://github.com/drkameleon/GraphGPU/issues).
 Want to contribute code? You are 100% welcome too! Just make a PR. 🚀
 
+To run the test suite:
+
+```bash
+npm install
+npm test            # single run
+npm run test:watch  # watch mode
+```
+
+And the benchmarks:
+
+```bash
+npm run bench                       # run all benchmarks
+npm run bench -- --filter QuadTree  # run only matching ones
+npm run bench:compare -- main       # compare your changes against main
+```
+
+Every PR touching the library is benchmarked against its base branch in CI, and the comparison shows up in the run summary.
+
 <hr/>
 
 ### License

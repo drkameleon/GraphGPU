@@ -8,6 +8,7 @@
 import type { GraphGPUOptions, RenderStats } from '../types';
 import type { Graph } from './Graph';
 import { Camera } from './Camera';
+import type { PositionTarget } from '../layout/GPUForceLayout';
 import { NODE_SHADER, EDGE_SHADER } from '../shaders';
 import { parseColor } from '../utils/color';
 
@@ -21,7 +22,7 @@ const NODE_UNIFORM_SIZE = 4 * (12 + 2 + 1 + 1); // 64 bytes
 // EdgeUniforms: camera (3×vec4) + viewport (vec2) + edgeOpacity (f32) + nodeScale (f32)
 const EDGE_UNIFORM_SIZE = 4 * (12 + 2 + 1 + 1); // 64 bytes
 
-export class Renderer {
+export class Renderer implements PositionTarget {
     private device!: GPUDevice;
     private context!: GPUCanvasContext;
     private format!: GPUTextureFormat;
@@ -40,12 +41,19 @@ export class Renderer {
     private nodeBindGroup!: GPUBindGroup;
 
     // GPU Buffers - Edges
-    private gpuEdgeVerts!: GPUBuffer;
+    private gpuEdges!: GPUBuffer;           // per edge: src u32, tgt u32, rgba8 color
+    private edgeBindGroupLayout!: GPUBindGroupLayout;
     private edgeUniformBuffer!: GPUBuffer;
     private edgeBindGroup!: GPUBindGroup;
 
-    // CPU edge vertex staging
-    private edgeVertexData: Float32Array = new Float32Array(0);
+    // CPU edge staging: [src, tgt, packedColor] per edge slot
+    private edgeData: Uint32Array = new Uint32Array(0);
+
+    // Edges currently on the GPU (re-uploaded only when edges change)
+    private uploadedStructure: number = -1;
+    private uploadedEdgeColors: number = -1;
+    private drawnEdges: number = 0;        // instances drawn (edge slots)
+    private visibleEdges: number = 0;      // active ones
 
     // Config
     private canvas: HTMLCanvasElement;
@@ -77,6 +85,15 @@ export class Renderer {
     private initialized: boolean = false;
     private animationId: number = 0;
     private labelsVisible: boolean = true;
+
+    // Positions owned by the GPU layout (shared buffer, no CPU uploads)
+    private externalPositions: boolean = false;
+
+    // Render on demand: frames are only drawn when something changed
+    private needsRender: boolean = true;
+    private renderedFrames: number = 0;
+    private lastRenderAt: number = -Infinity;
+    private onFontsLoaded = () => this.invalidate();
 
     constructor(
         private graph: Graph,
@@ -144,6 +161,7 @@ export class Renderer {
 
     /** Resize canvas to match container */
     resizeCanvas(): void {
+        this.invalidate();
         const rect = this.canvas.getBoundingClientRect();
         this.canvas.width = rect.width * this.pixelRatio;
         this.canvas.height = rect.height * this.pixelRatio;
@@ -237,30 +255,36 @@ export class Renderer {
         // --- Edge pipeline (lines) ---
         const edgeModule = this.device.createShaderModule({ code: EDGE_SHADER });
 
-        const edgeBindGroupLayout = this.device.createBindGroupLayout({
-            entries: [{
-                binding: 0,
-                visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
-                buffer: { type: 'uniform' },
-            }],
+        this.edgeBindGroupLayout = this.device.createBindGroupLayout({
+            entries: [
+                {
+                    binding: 0,
+                    visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+                    buffer: { type: 'uniform' },
+                },
+                {
+                    // Node positions, read directly by the edge vertex shader
+                    binding: 1,
+                    visibility: GPUShaderStage.VERTEX,
+                    buffer: { type: 'read-only-storage' },
+                },
+            ],
         });
 
         this.edgePipeline = this.device.createRenderPipeline({
             layout: this.device.createPipelineLayout({
-                bindGroupLayouts: [edgeBindGroupLayout],
+                bindGroupLayouts: [this.edgeBindGroupLayout],
             }),
             vertex: {
                 module: edgeModule,
                 entryPoint: 'vs_edge',
                 buffers: [{
-                    // Per-instance: srcPos(vec2f) + tgtPos(vec2f) + alpha(f32) + color(vec3f)
-                    arrayStride: 32,  // 8 floats × 4 bytes
+                    // Per-instance: endpoints (2 × u32) + color (rgba8, a = 0 → hidden)
+                    arrayStride: 12,
                     stepMode: 'instance',
                     attributes: [
-                        { shaderLocation: 0, offset: 0, format: 'float32x2' },   // srcPos
-                        { shaderLocation: 1, offset: 8, format: 'float32x2' },   // tgtPos
-                        { shaderLocation: 2, offset: 16, format: 'float32' },    // alpha
-                        { shaderLocation: 3, offset: 20, format: 'float32x3' },  // color RGB
+                        { shaderLocation: 0, offset: 0, format: 'uint32x2' },   // src, tgt
+                        { shaderLocation: 1, offset: 8, format: 'unorm8x4' },   // color
                     ],
                 }],
             },
@@ -289,10 +313,16 @@ export class Renderer {
             layout: nodeBindGroupLayout,
             entries: [{ binding: 0, resource: { buffer: this.nodeUniformBuffer } }],
         });
+    }
 
+    /** (Re)create the edge bind group: it references the positions buffer */
+    private createEdgeBindGroup(): void {
         this.edgeBindGroup = this.device.createBindGroup({
-            layout: edgeBindGroupLayout,
-            entries: [{ binding: 0, resource: { buffer: this.edgeUniformBuffer } }],
+            layout: this.edgeBindGroupLayout,
+            entries: [
+                { binding: 0, resource: { buffer: this.edgeUniformBuffer } },
+                { binding: 1, resource: { buffer: this.gpuPositions } },
+            ],
         });
     }
 
@@ -301,20 +331,22 @@ export class Renderer {
     // =========================================================
 
     private allocateBuffers(): void {
-        this.reallocNodeBuffers(this.graph.numNodes || 256);
-        this.reallocEdgeBuffers(this.graph.numEdges || 512);
+        this.reallocNodeBuffers(this.graph.nodeSlots || 256);
+        this.reallocEdgeBuffers(this.graph.edgeSlots || 512);
     }
 
     private reallocNodeBuffers(capacity: number): void {
         const cap = Math.max(capacity, 256);
-        this.gpuPositions?.destroy();
+        const oldPositions = this.gpuPositions;
+        const oldCapacity = this.gpuNodeCapacity;
         this.gpuColors?.destroy();
         this.gpuSizes?.destroy();
         this.gpuSelection?.destroy();
 
         this.gpuPositions = this.device.createBuffer({
             size: cap * 2 * 4,
-            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.STORAGE |
+                GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
         });
         this.gpuColors = this.device.createBuffer({
             size: cap * 4 * 4,
@@ -329,23 +361,42 @@ export class Renderer {
             usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
         });
         this.gpuNodeCapacity = cap;
+        this.createEdgeBindGroup();
+
+        if (oldPositions) {
+            // While the GPU layout owns positions, the GPU copy is the
+            // only up-to-date one: carry it over
+            if (this.externalPositions && oldCapacity > 0) {
+                const encoder = this.device.createCommandEncoder();
+                encoder.copyBufferToBuffer(oldPositions, 0, this.gpuPositions, 0, Math.min(oldCapacity, cap) * 8);
+                this.device.queue.submit([encoder.finish()]);
+            }
+            oldPositions.destroy();
+        }
     }
 
     private reallocEdgeBuffers(capacity: number): void {
         const cap = Math.max(capacity, 512);
-        this.gpuEdgeVerts?.destroy();
-        this.gpuEdgeVerts = this.device.createBuffer({
-            size: cap * 8 * 4, // 8 floats per edge instance (srcXY, tgtXY, alpha, RGB)
+        this.gpuEdges?.destroy();
+        this.gpuEdges = this.device.createBuffer({
+            size: cap * 3 * 4, // src, tgt, packed color
             usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
         });
         this.gpuEdgeCapacity = cap;
-        this.edgeVertexData = new Float32Array(cap * 8);
+        this.edgeData = new Uint32Array(cap * 3);
     }
 
+    /**
+     * Upload node data. Moving nodes (layouts, dragging) only marks
+     * positions dirty, so usually only 8 bytes per node go up; colors
+     * and sizes only when they changed, selection only when it did.
+     */
     private uploadNodeData(): void {
-        const n = this.graph.numNodes;
+        const n = this.graph.nodeSlots;
+        let all = this.graph.dirtyNodeAttributes;
         if (n > this.gpuNodeCapacity) {
             this.reallocNodeBuffers(n * 2);
+            all = true; // fresh buffers
         }
 
         // Grow selection buffer if needed
@@ -355,70 +406,83 @@ export class Renderer {
             this.selectionData.set(old);
         }
 
-        this.device.queue.writeBuffer(
-            this.gpuPositions, 0,
-            this.graph.positions.buffer, 0, n * 2 * 4,
-        );
-        this.device.queue.writeBuffer(
-            this.gpuColors, 0,
-            this.graph.colors.buffer, 0, n * 4 * 4,
-        );
-        this.device.queue.writeBuffer(
-            this.gpuSizes, 0,
-            this.graph.sizes.buffer, 0, n * 4,
-        );
-        this.device.queue.writeBuffer(
-            this.gpuSelection, 0,
-            this.selectionData.buffer, 0, n * 4,
-        );
+        if (this.externalPositions) {
+            // The GPU layout writes positions; only send explicit edits
+            // (dragged / added / reset nodes)
+            this.flushPositionEdits();
+        } else if (this.graph.dirtyNodes || all) {
+            this.device.queue.writeBuffer(
+                this.gpuPositions, 0,
+                this.graph.positions.buffer, 0, n * 2 * 4,
+            );
+        }
+
+        if (all) {
+            this.device.queue.writeBuffer(
+                this.gpuColors, 0,
+                this.graph.colors.buffer, 0, n * 4 * 4,
+            );
+            this.device.queue.writeBuffer(
+                this.gpuSizes, 0,
+                this.graph.sizes.buffer, 0, n * 4,
+            );
+        }
+
+        if (this.selectionDirty || all) {
+            this.device.queue.writeBuffer(
+                this.gpuSelection, 0,
+                this.selectionData.buffer, 0, n * 4,
+            );
+        }
 
         this.graph.dirtyNodes = false;
+        this.graph.dirtyNodeAttributes = false;
         this.selectionDirty = false;
     }
 
-    // Visible edge count (updated during upload)
-    private lastVisibleEdges: number = 0;
-
+    /**
+     * Upload the edge list. Edges only store endpoint ids + color:
+     * the vertex shader reads node positions from the GPU, so this
+     * only runs when edges are added, removed or recolored — not
+     * when nodes move.
+     */
     private uploadEdgeData(): void {
-        const edgeCount = this.graph.numEdges;
+        const edgeCount = this.graph.edgeSlots;
         if (edgeCount > this.gpuEdgeCapacity) {
             this.reallocEdgeBuffers(edgeCount * 2);
         }
 
-        const positions = this.graph.positions;
         const indices = this.graph.edgeIndices;
         const edgeColors = this.graph.edgeColors;
-        let writeIdx = 0;
-        let visibleEdges = 0;
+        const data = this.edgeData;
+        let visible = 0;
 
         for (let i = 0; i < edgeCount; i++) {
             const src = indices[i * 2];
             const tgt = indices[i * 2 + 1];
-            if (!this.graph.isNodeActive(src) || !this.graph.isNodeActive(tgt)) continue;
-            if (!this.graph.isEdgeActive(i)) continue;
-
-            // Per-instance: srcX, srcY, tgtX, tgtY, alpha, R, G, B
-            this.edgeVertexData[writeIdx++] = positions[src * 2];
-            this.edgeVertexData[writeIdx++] = positions[src * 2 + 1];
-            this.edgeVertexData[writeIdx++] = positions[tgt * 2];
-            this.edgeVertexData[writeIdx++] = positions[tgt * 2 + 1];
-            this.edgeVertexData[writeIdx++] = 1.0;
-            this.edgeVertexData[writeIdx++] = edgeColors[i * 3];
-            this.edgeVertexData[writeIdx++] = edgeColors[i * 3 + 1];
-            this.edgeVertexData[writeIdx++] = edgeColors[i * 3 + 2];
-            visibleEdges++;
+            const o = i * 3;
+            if (!this.graph.isEdgeActive(i) ||
+                !this.graph.isNodeActive(src) || !this.graph.isNodeActive(tgt)) {
+                // Removed slot: alpha 0 makes the shader skip it
+                data[o] = 0;
+                data[o + 1] = 0;
+                data[o + 2] = 0;
+                continue;
+            }
+            data[o] = src;
+            data[o + 1] = tgt;
+            data[o + 2] = packColor(edgeColors[i * 3], edgeColors[i * 3 + 1], edgeColors[i * 3 + 2]);
+            visible++;
         }
 
-        this.lastVisibleEdges = visibleEdges;
-
-        if (visibleEdges > 0) {
-            this.device.queue.writeBuffer(
-                this.gpuEdgeVerts, 0,
-                this.edgeVertexData.buffer, 0, visibleEdges * 8 * 4,
-            );
+        if (edgeCount > 0) {
+            this.device.queue.writeBuffer(this.gpuEdges, 0, data.buffer, 0, edgeCount * 3 * 4);
         }
 
-        this.graph.dirtyEdges = false;
+        this.drawnEdges = edgeCount;
+        this.visibleEdges = visible;
+        this.uploadedStructure = this.graph.structureVersion;
+        this.uploadedEdgeColors = this.graph.edgeColorVersion;
     }
 
     // =========================================================
@@ -431,14 +495,25 @@ export class Renderer {
             return this.emptyStats();
         }
 
+        this.needsRender = false;
+        this.renderedFrames++;
+        this.lastRenderAt = performance.now();
+
         const t = timestamp / 1000;
 
         // Update camera matrix
         this.camera.update();
 
-        // Upload dirty data
-        if (this.graph.dirtyNodes || this.selectionDirty) this.uploadNodeData();
-        if (this.graph.dirtyEdges) this.uploadEdgeData();
+        // Upload dirty data. Edges follow node positions on the GPU,
+        // so moving nodes only uploads node data.
+        if (this.graph.dirtyNodes || this.graph.dirtyNodeAttributes || this.selectionDirty) {
+            this.uploadNodeData();
+        }
+        if (this.uploadedStructure !== this.graph.structureVersion ||
+            this.uploadedEdgeColors !== this.graph.edgeColorVersion) {
+            this.uploadEdgeData();
+        }
+        this.graph.dirtyEdges = false;
 
         // Write uniforms
         const uniforms = new Float32Array(16);
@@ -494,16 +569,16 @@ export class Renderer {
         });
 
         // Draw edges first (behind nodes) - 6 verts per quad, instanced
-        const visibleEdges = this.lastVisibleEdges;
+        const visibleEdges = this.visibleEdges;
         if (visibleEdges > 0) {
             pass.setPipeline(this.edgePipeline);
             pass.setBindGroup(0, this.edgeBindGroup);
-            pass.setVertexBuffer(0, this.gpuEdgeVerts);
-            pass.draw(6, visibleEdges);
+            pass.setVertexBuffer(0, this.gpuEdges);
+            pass.draw(6, this.drawnEdges);
         }
 
         // Draw nodes
-        const nodeCount = this.graph.numNodes;
+        const nodeCount = this.graph.nodeSlots;
         if (nodeCount > 0) {
             pass.setPipeline(this.nodePipeline);
             pass.setBindGroup(0, this.nodeBindGroup);
@@ -538,20 +613,82 @@ export class Renderer {
         return {
             fps: this.currentFps,
             frameTime: 0,
-            nodeCount,
+            nodeCount: this.graph.numNodes,
             edgeCount: this.graph.numEdges,
-            visibleNodes: nodeCount,
+            visibleNodes: this.graph.numNodes,
             visibleEdges,
         };
     }
 
     /** Start the render loop */
     start(): void {
+        if (this.animationId) return; // already running
         const loop = (ts: number) => {
-            this.renderFrame(ts);
+            // Skip the frame entirely (no GPU work, no label pass)
+            // unless something changed since the last one
+            if (this.isDirty()) this.renderFrame(ts);
             this.animationId = requestAnimationFrame(loop);
         };
+        this.invalidate();
         this.animationId = requestAnimationFrame(loop);
+    }
+
+    // =========================================================
+    // Shared positions (PositionTarget, for the GPU layout)
+    // =========================================================
+
+    acquirePositions(slots: number): GPUBuffer {
+        if (!this.externalPositions) {
+            this.externalPositions = true;
+            this.graph.trackPositionEdits(true);
+        }
+        if (slots > this.gpuNodeCapacity) {
+            this.reallocNodeBuffers(slots);
+            this.graph.dirtyNodes = true;
+            this.graph.dirtyNodeAttributes = true; // new buffers: colors/sizes too
+        }
+        return this.gpuPositions;
+    }
+
+    releasePositions(): void {
+        if (!this.externalPositions) return;
+        this.flushPositionEdits();
+        this.externalPositions = false;
+        this.graph.trackPositionEdits(false);
+        // CPU positions are in sync again
+        this.graph.dirtyNodes = true;
+        this.invalidate();
+    }
+
+    positionsChanged(): void {
+        this.invalidate();
+    }
+
+    private flushPositionEdits(): void {
+        for (const [id, [x, y]] of this.graph.takePositionEdits()) {
+            if (id >= this.gpuNodeCapacity) continue; // covered by the next full sync
+            this.device.queue.writeBuffer(this.gpuPositions, id * 8, new Float32Array([x, y]));
+        }
+    }
+
+    /** Force the next frame to be drawn */
+    invalidate(): void {
+        this.needsRender = true;
+    }
+
+    /** Whether anything changed since the last drawn frame */
+    isDirty(): boolean {
+        return this.needsRender ||
+            this.camera.dirty ||
+            this.graph.dirtyNodes ||
+            this.graph.dirtyNodeAttributes ||
+            this.graph.dirtyEdges ||
+            this.selectionDirty;
+    }
+
+    /** Number of frames actually drawn so far */
+    getRenderedFrames(): number {
+        return this.renderedFrames;
     }
 
     /** Stop the render loop */
@@ -569,34 +706,41 @@ export class Renderer {
 
     /** Change background color at runtime */
     setBackground(color: [number, number, number, number]): void {
+        this.invalidate();
         this.backgroundColor = color;
     }
 
     /** Change node scale at runtime */
     setNodeScale(scale: number): void {
+        this.invalidate();
         this.nodeScale = scale;
     }
 
     /** Change edge opacity at runtime */
     setEdgeOpacity(opacity: number): void {
+        this.invalidate();
         this.edgeOpacity = opacity;
     }
 
     /** Show or hide all labels (node + edge) */
     setLabelsVisible(visible: boolean): void {
+        this.invalidate();
         this.labelsVisible = visible;
     }
 
-    /** Get current FPS */
+    /**
+     * Frames per second actually drawn. Frames are only drawn when
+     * something changes, so an idle graph reports 0.
+     */
     getFps(): number {
-        return this.currentFps;
+        return performance.now() - this.lastRenderAt > 1000 ? 0 : this.currentFps;
     }
 
     /** Set selection state for a node (1.0 = selected, 0.0 = not) */
     setSelection(nodeId: number, selected: boolean): void {
         if (this.selectionData.length <= nodeId) {
             const old = this.selectionData;
-            this.selectionData = new Float32Array(Math.max(nodeId + 1, this.graph.numNodes));
+            this.selectionData = new Float32Array(Math.max(nodeId + 1, this.graph.nodeSlots));
             this.selectionData.set(old);
         }
         this.selectionData[nodeId] = selected ? 1.0 : 0.0;
@@ -611,6 +755,8 @@ export class Renderer {
 
     /** Initialize overlay canvases */
     initLabelOverlay(): void {
+        // Labels drawn before a web font loads must be redrawn after
+        document.fonts?.addEventListener?.('loadingdone', this.onFontsLoaded);
         // Label canvas: sits IN FRONT of the WebGPU canvas
         this.labelCanvas = document.createElement('canvas');
         this.labelCanvas.style.cssText =
@@ -629,215 +775,347 @@ export class Renderer {
         this.labelCtx = this.labelCanvas.getContext('2d');
     }
 
-    /**
-     * Convert world position to CSS-pixel screen position.
-     * This duplicates the Camera math but returns CSS pixels directly.
-     */
-    private worldToCSS(wx: number, wy: number): [number, number] {
-        const m = this.camera.matrix;
-        // matrix is col-major std140: col0=[m0,m1,_,_] col1=[m4,m5,_,_] col2=[m8,m9,_,_]
-        const ndcX = wx * m[0] + wy * m[4] + m[8];
-        const ndcY = wx * m[1] + wy * m[5] + m[9];
-        // NDC [-1,1] → CSS pixels [0, clientWidth]
-        const cw = this.canvas.clientWidth;
-        const ch = this.canvas.clientHeight;
-        const sx = (ndcX + 1) * 0.5 * cw;
-        const sy = (-ndcY + 1) * 0.5 * ch;
-        return [sx, sy];
+    // =========================================================
+    // Label overlay
+    // =========================================================
+    // Per frame, allocation-free where it matters:
+    //   1. project active nodes to screen (typed arrays)
+    //   2. collect edge label candidates (culled & measured)
+    //   3. bucket node circles near those labels into a grid, so
+    //      each label only tests nearby nodes for overlap
+    //   4. draw edge labels, then node labels on top
+    // =========================================================
+
+    // Reused per-frame buffers
+    // (Float64, so label placement matches plain JS number math exactly)
+    private labelSX: Float64Array = new Float64Array(0);
+    private labelSY: Float64Array = new Float64Array(0);
+    private labelR: Float64Array = new Float64Array(0);
+    private labelCorners: Float64Array = new Float64Array(0); // 8 per candidate
+    private labelInfo: Float64Array = new Float64Array(0);    // sx, sy, angle, offset per candidate
+    private labelEdges: Int32Array = new Int32Array(0);
+    private labelFonts: string[] = [];
+
+    // Text measurement caches (cleared when they grow too big)
+    private textWidths = new Map<string, number>();
+    private truncations = new Map<string, string | null>();
+
+    private measure(ctx: CanvasRenderingContext2D, font: string, text: string): number {
+        const key = font + '\u0000' + text;
+        let w = this.textWidths.get(key);
+        if (w === undefined) {
+            if (this.textWidths.size > 20000) this.textWidths.clear();
+            w = ctx.measureText(text).width;
+            this.textWidths.set(key, w);
+        }
+        return w;
+    }
+
+    /** Label as displayed within maxW (ellipsized), or null if it can't fit */
+    private fitLabel(ctx: CanvasRenderingContext2D, font: string, label: string, maxW: number): string | null {
+        const key = font + '\u0000' + maxW + '\u0000' + label;
+        const cached = this.truncations.get(key);
+        if (cached !== undefined) return cached;
+        if (this.truncations.size > 20000) this.truncations.clear();
+
+        let disp = label;
+        if (this.measure(ctx, font, disp) > maxW) {
+            let lo = 1, hi = label.length;
+            while (lo < hi) {
+                const mid = (lo + hi + 1) >> 1;
+                if (this.measure(ctx, font, label.slice(0, mid) + '…') <= maxW) lo = mid; else hi = mid - 1;
+            }
+            disp = label.slice(0, lo) + '…';
+        }
+        const result = this.measure(ctx, font, disp) > maxW ? null : disp;
+        this.truncations.set(key, result);
+        return result;
     }
 
     /** Render labels on Canvas2D overlay */
     private renderOverlay(): void {
+        const lctx = this.labelCtx;
+        const labelCanvas = this.labelCanvas;
+        if (!lctx || !labelCanvas) return;
+
         const pr = this.pixelRatio;
         const cw = this.canvas.clientWidth;
         const ch = this.canvas.clientHeight;
         const tw = Math.round(cw * pr);
         const th = Math.round(ch * pr);
 
-        // ---- Labels (in front of WebGPU canvas) ----
-        if (this.labelCtx && this.labelCanvas) {
-            if (this.labelCanvas.width !== tw || this.labelCanvas.height !== th) {
-                this.labelCanvas.width = tw;
-                this.labelCanvas.height = th;
-            }
-            const lctx = this.labelCtx;
-            lctx.clearRect(0, 0, tw, th);
-            lctx.save();
-            lctx.scale(pr, pr);
-            lctx.textAlign = 'center';
-            lctx.textBaseline = 'middle';
-
-            const positions = this.graph.positions;
-            const sizes = this.graph.sizes;
-
-            const camZoomGlobal = Math.abs(this.camera.matrix[0]);
-
-            // ---- Pre-compute node screen positions & radii for overlap culling ----
-            const nodeScreenData: { sx: number; sy: number; r: number }[] = [];
-            for (const id of this.graph.activeNodeIds()) {
-                const wx = positions[id * 2];
-                const wy = positions[id * 2 + 1];
-                const [sx, sy] = this.worldToCSS(wx, wy);
-                const nodeWorldSize = sizes[id] * this.nodeScale * 0.01;
-                const nodeScreenR = nodeWorldSize * camZoomGlobal * cw * 0.5;
-                nodeScreenData[id] = { sx, sy, r: nodeScreenR };
-            }
-
-            // ---- Edge labels (drawn FIRST so node labels paint over them) ----
-            const baseNodeWorldSize = this.nodeScale * 0.01;
-            const projectedNodeR = baseNodeWorldSize * camZoomGlobal * cw * 0.5;
-            const edgeWidthPx = Math.max(2.5, projectedNodeR * 1.0);
-
-            // Only show edge labels when node labels are visible.
-            // Node labels appear when nodeScreenR >= 16. Check any active node.
-            let anyNodeLabelVisible = false;
-            for (const id of this.graph.activeNodeIds()) {
-                if (nodeScreenData[id] && nodeScreenData[id].r >= 16) {
-                    anyNodeLabelVisible = true;
-                    break;
-                }
-            }
-
-            if (anyNodeLabelVisible) {
-                lctx.textAlign = 'center';
-                lctx.textBaseline = 'middle';
-
-                const edgeIndices = this.graph.edgeIndices;
-                const pos = this.graph.positions;
-                const numEdges = this.graph.numEdges;
-
-                // Skip edge labels for large graphs — they'd be unreadable clutter
-                // and the overlap check + text rendering is expensive
-                if (numEdges <= 300) {
-                    for (const eid of this.graph.activeEdgeIds()) {
-                        const src = edgeIndices[eid * 2];
-                        const tgt = edgeIndices[eid * 2 + 1];
-                        if (!this.graph.isNodeActive(src) || !this.graph.isNodeActive(tgt)) continue;
-
-                        const edge = this.graph.getEdge(eid);
-                        if (!edge || !edge.tag) continue;
-
-                        // Use the average screen radius of src and tgt nodes.
-                        const srcR = nodeScreenData[src]?.r ?? 0;
-                        const tgtR = nodeScreenData[tgt]?.r ?? 0;
-                        const avgNodeR = (srcR + tgtR) * 0.5;
-
-                        // Edge font = 65% of what the node label would be WITHOUT the 22px cap.
-                        const edgeFontSize = Math.max(7, avgNodeR * 0.28 * 0.65);
-
-                        lctx.font = `500 ${edgeFontSize}px -apple-system,"Segoe UI",Helvetica,Arial,sans-serif`;
-                        lctx.fillStyle = 'rgba(160,155,175,0.85)';
-
-                        const labelOffset = edgeWidthPx * 0.5 + edgeFontSize * 0.55 + 3;
-
-                        // Midpoint in world coords
-                        const mx = (pos[src * 2] + pos[tgt * 2]) * 0.5;
-                        const my = (pos[src * 2 + 1] + pos[tgt * 2 + 1]) * 0.5;
-                        const [sx, sy] = this.worldToCSS(mx, my);
-
-                        if (sx < -80 || sx > cw + 80 || sy < -40 || sy > ch + 40) continue;
-
-                        // Compute edge angle for rotated text
-                        const [sx1, sy1] = this.worldToCSS(pos[src * 2], pos[src * 2 + 1]);
-                        const [sx2, sy2] = this.worldToCSS(pos[tgt * 2], pos[tgt * 2 + 1]);
-                        let angle = Math.atan2(sy2 - sy1, sx2 - sx1);
-
-                        if (angle > Math.PI / 2) angle -= Math.PI;
-                        if (angle < -Math.PI / 2) angle += Math.PI;
-
-                        const edgeLen = Math.hypot(sx2 - sx1, sy2 - sy1);
-                        if (edgeLen < 40) continue;
-
-                        // Check overlap against src and tgt nodes only (O(1) per edge)
-                        const textW = lctx.measureText(edge.tag).width * 0.5 + 4;
-                        const textH = edgeFontSize * 0.6 + 4;
-                        const cosA = Math.cos(angle);
-                        const sinA = Math.sin(angle);
-                        const offY = -labelOffset;
-                        const corners = [
-                            { x: sx + cosA * (-textW) - sinA * (offY - textH), y: sy + sinA * (-textW) + cosA * (offY - textH) },
-                            { x: sx + cosA * ( textW) - sinA * (offY - textH), y: sy + sinA * ( textW) + cosA * (offY - textH) },
-                            { x: sx + cosA * ( textW) - sinA * (offY + textH), y: sy + sinA * ( textW) + cosA * (offY + textH) },
-                            { x: sx + cosA * (-textW) - sinA * (offY + textH), y: sy + sinA * (-textW) + cosA * (offY + textH) },
-                        ];
-                        let overlapsNode = false;
-                        // Only check the two connected nodes — they're the only
-                        // ones whose circles can realistically overlap the midpoint label
-                        for (const nid of [src, tgt]) {
-                            const nd = nodeScreenData[nid];
-                            if (!nd) continue;
-                            const rSq = nd.r * nd.r;
-                            for (const c of corners) {
-                                const dx = c.x - nd.sx;
-                                const dy = c.y - nd.sy;
-                                if (dx * dx + dy * dy < rSq) {
-                                    overlapsNode = true;
-                                    break;
-                                }
-                            }
-                            if (overlapsNode) break;
-                        }
-                        if (overlapsNode) continue;
-
-                        lctx.save();
-                        lctx.translate(sx, sy);
-                        lctx.rotate(angle);
-                        lctx.fillText(edge.tag, 0, -labelOffset);
-                        lctx.restore();
-                    }
-                }
-            }
-
-            // ---- Node labels (drawn AFTER edge labels so they paint on top) ----
-            for (const id of this.graph.activeNodeIds()) {
-                const nd = nodeScreenData[id];
-                if (!nd) continue;
-                const { sx, sy, r: nodeScreenR } = nd;
-
-                if (sx < -60 || sx > cw + 60 || sy < -60 || sy > ch + 60) continue;
-                if (nodeScreenR < 16) continue;
-
-                const node = this.graph.getNode(id);
-                if (!node) continue;
-                const label = (node.properties.name ?? node.properties.title ?? node.tag) as string;
-                if (!label) continue;
-
-                const fontSize = Math.max(7, Math.min(nodeScreenR * 0.28, 22));
-                lctx.font = `600 ${fontSize}px -apple-system,"Segoe UI",Helvetica,Arial,sans-serif`;
-
-                const maxW = nodeScreenR * 1.6;
-                let disp = label;
-                if (lctx.measureText(disp).width > maxW) {
-                    let lo = 1, hi = label.length;
-                    while (lo < hi) {
-                        const mid = (lo + hi + 1) >> 1;
-                        if (lctx.measureText(label.slice(0, mid) + '…').width <= maxW) lo = mid; else hi = mid - 1;
-                    }
-                    disp = label.slice(0, lo) + '…';
-                }
-                if (lctx.measureText(disp).width > maxW) continue;
-
-                const r = this.graph.colors[id * 4];
-                const g = this.graph.colors[id * 4 + 1];
-                const b = this.graph.colors[id * 4 + 2];
-                const lum = r * 0.2126 + g * 0.7152 + b * 0.0722;
-                lctx.fillStyle = lum > 0.189 ? 'rgba(0,0,0,0.88)' : 'rgba(255,255,255,0.93)';
-
-                lctx.fillText(disp, sx, sy);
-            }
-
-            lctx.restore();
+        if (labelCanvas.width !== tw || labelCanvas.height !== th) {
+            labelCanvas.width = tw;
+            labelCanvas.height = th;
         }
+        lctx.clearRect(0, 0, tw, th);
+
+        const graph = this.graph;
+        const slots = graph.nodeSlots;
+        const positions = graph.positions;
+        const sizes = graph.sizes;
+        const m = this.camera.matrix;
+        const camZoomGlobal = Math.abs(m[0]);
+        const nodeRadius = (size: number) => size * this.nodeScale * 0.01 * camZoomGlobal * cw * 0.5;
+
+        // Labels only appear on nodes at least 16px in radius (and
+        // edge labels only alongside them): skip everything otherwise
+        let maxSize = 0;
+        for (let id = 0; id < slots; id++) {
+            if (sizes[id] > maxSize && graph.isNodeActive(id)) maxSize = sizes[id];
+        }
+        if (nodeRadius(maxSize) < 16) return;
+
+        lctx.save();
+        lctx.scale(pr, pr);
+        lctx.textAlign = 'center';
+        lctx.textBaseline = 'middle';
+
+        // ---- 1. Project nodes (world → CSS pixels) ----
+        if (this.labelSX.length < slots) {
+            this.labelSX = new Float64Array(slots * 2);
+            this.labelSY = new Float64Array(slots * 2);
+            this.labelR = new Float64Array(slots * 2);
+        }
+        const SX = this.labelSX, SY = this.labelSY, R = this.labelR;
+        for (let id = 0; id < slots; id++) {
+            const wx = positions[id * 2];
+            const wy = positions[id * 2 + 1];
+            SX[id] = (wx * m[0] + wy * m[4] + m[8] + 1) * 0.5 * cw;
+            SY[id] = (-(wx * m[1] + wy * m[5] + m[9]) + 1) * 0.5 * ch;
+            R[id] = nodeRadius(sizes[id]);
+        }
+
+        // ---- 2. Edge label candidates ----
+        const projectedNodeR = this.nodeScale * 0.01 * camZoomGlobal * cw * 0.5;
+        const edgeWidthPx = Math.max(2.5, projectedNodeR * 1.0);
+        const edgeIndices = graph.edgeIndices;
+        const edgeSlots = graph.edgeSlots;
+        if (this.labelEdges.length < edgeSlots) {
+            this.labelEdges = new Int32Array(edgeSlots * 2);
+            this.labelInfo = new Float64Array(edgeSlots * 2 * 4);
+            this.labelCorners = new Float64Array(edgeSlots * 2 * 8);
+        }
+        const cand = this.labelEdges, info = this.labelInfo, corners = this.labelCorners;
+        const fonts = this.labelFonts;
+        let count = 0;
+        let qMinX = Infinity, qMinY = Infinity, qMaxX = -Infinity, qMaxY = -Infinity;
+
+        for (let eid = 0; eid < edgeSlots; eid++) {
+            const tag = graph.getEdgeTag(eid);
+            if (!tag) continue; // removed, or untagged
+            const src = edgeIndices[eid * 2];
+            const tgt = edgeIndices[eid * 2 + 1];
+            if (!graph.isNodeActive(src) || !graph.isNodeActive(tgt)) continue;
+
+            const sx1 = SX[src], sy1 = SY[src], sx2 = SX[tgt], sy2 = SY[tgt];
+            const mx = (positions[src * 2] + positions[tgt * 2]) * 0.5;
+            const my = (positions[src * 2 + 1] + positions[tgt * 2 + 1]) * 0.5;
+            const sx = (mx * m[0] + my * m[4] + m[8] + 1) * 0.5 * cw;
+            const sy = (-(mx * m[1] + my * m[5] + m[9]) + 1) * 0.5 * ch;
+            if (sx < -80 || sx > cw + 80 || sy < -40 || sy > ch + 40) continue;
+            if (Math.hypot(sx2 - sx1, sy2 - sy1) < 40) continue;
+
+            let angle = Math.atan2(sy2 - sy1, sx2 - sx1);
+            if (angle > Math.PI / 2) angle -= Math.PI;
+            if (angle < -Math.PI / 2) angle += Math.PI;
+
+            // Edge font = 65% of what the node label would be WITHOUT the 22px cap
+            const avgNodeR = (R[src] + R[tgt]) * 0.5;
+            const edgeFontSize = Math.max(7, avgNodeR * 0.28 * 0.65);
+            const font = `500 ${edgeFontSize}px -apple-system,"Segoe UI",Helvetica,Arial,sans-serif`;
+            if (lctx.font !== font) lctx.font = font;
+
+            const labelOffset = edgeWidthPx * 0.5 + edgeFontSize * 0.55 + 3;
+            const textW = this.measure(lctx, font, tag) * 0.5 + 4;
+            const textH = edgeFontSize * 0.6 + 4;
+            const cosA = Math.cos(angle);
+            const sinA = Math.sin(angle);
+            const offY = -labelOffset;
+
+            // Four corners of the rotated label box
+            const c = count * 8;
+            corners[c] = sx + cosA * (-textW) - sinA * (offY - textH);
+            corners[c + 1] = sy + sinA * (-textW) + cosA * (offY - textH);
+            corners[c + 2] = sx + cosA * textW - sinA * (offY - textH);
+            corners[c + 3] = sy + sinA * textW + cosA * (offY - textH);
+            corners[c + 4] = sx + cosA * textW - sinA * (offY + textH);
+            corners[c + 5] = sy + sinA * textW + cosA * (offY + textH);
+            corners[c + 6] = sx + cosA * (-textW) - sinA * (offY + textH);
+            corners[c + 7] = sy + sinA * (-textW) + cosA * (offY + textH);
+            for (let k = 0; k < 8; k += 2) {
+                const x = corners[c + k], y = corners[c + k + 1];
+                if (x < qMinX) qMinX = x;
+                if (x > qMaxX) qMaxX = x;
+                if (y < qMinY) qMinY = y;
+                if (y > qMaxY) qMaxY = y;
+            }
+
+            const o = count * 4;
+            info[o] = sx;
+            info[o + 1] = sy;
+            info[o + 2] = angle;
+            info[o + 3] = labelOffset;
+            cand[count] = eid;
+            fonts[count] = font;
+            count++;
+        }
+
+        // ---- 3. Drop labels overlapping any node circle ----
+        if (count > 0) {
+            const grid = this.buildNodeGrid(slots, qMinX, qMinY, qMaxX, qMaxY);
+
+            lctx.fillStyle = 'rgba(160,155,175,0.85)';
+            for (let i = 0; i < count; i++) {
+                const c = i * 8;
+                let overlaps = false;
+                for (let k = 0; k < 8 && !overlaps; k += 2) {
+                    overlaps = grid.hits(corners[c + k], corners[c + k + 1]);
+                }
+                if (overlaps) continue;
+
+                // ---- 4a. Draw edge label ----
+                const o = i * 4;
+                const font = fonts[i];
+                if (lctx.font !== font) lctx.font = font;
+                lctx.save();
+                lctx.translate(info[o], info[o + 1]);
+                lctx.rotate(info[o + 2]);
+                lctx.fillText(graph.getEdgeTag(cand[i])!, 0, -info[o + 3]);
+                lctx.restore();
+            }
+        }
+
+        // ---- 4b. Node labels (on top of edge labels) ----
+        const colors = graph.colors;
+        for (let id = 0; id < slots; id++) {
+            const nodeScreenR = R[id];
+            if (nodeScreenR < 16 || !graph.isNodeActive(id)) continue;
+            const sx = SX[id], sy = SY[id];
+            if (sx < -60 || sx > cw + 60 || sy < -60 || sy > ch + 60) continue;
+
+            const props = graph.getNodeProperties(id)!;
+            const label = (props.name ?? props.title ?? graph.getNodeTag(id)) as string;
+            if (!label) continue;
+
+            const fontSize = Math.max(7, Math.min(nodeScreenR * 0.28, 22));
+            const font = `600 ${fontSize}px -apple-system,"Segoe UI",Helvetica,Arial,sans-serif`;
+            if (lctx.font !== font) lctx.font = font;
+
+            const disp = this.fitLabel(lctx, font, label, nodeScreenR * 1.6);
+            if (disp === null) continue;
+
+            const lum = colors[id * 4] * 0.2126 + colors[id * 4 + 1] * 0.7152 + colors[id * 4 + 2] * 0.0722;
+            lctx.fillStyle = lum > 0.189 ? 'rgba(0,0,0,0.88)' : 'rgba(255,255,255,0.93)';
+            lctx.fillText(disp, sx, sy);
+        }
+
+        lctx.restore();
+    }
+
+    // Reused grid storage (cell → node list, CSR layout)
+    private gridIds: Int32Array = new Int32Array(0);
+    private gridStart: Int32Array = new Int32Array(0);
+    private gridItems: Int32Array = new Int32Array(0);
+    private gridSpan: Int32Array = new Int32Array(4);
+
+    /**
+     * Uniform grid of the node circles that intersect the given area
+     * (in CSS pixels), for "is this point inside any node?" queries.
+     * Cells are sized by both node density and node size, so every
+     * node only lands in a few cells.
+     */
+    private buildNodeGrid(slots: number, minX: number, minY: number, maxX: number, maxY: number) {
+        const SX = this.labelSX, SY = this.labelSY, R = this.labelR;
+        const graph = this.graph;
+
+        // Nodes whose circle reaches the query area
+        if (this.gridIds.length < slots) this.gridIds = new Int32Array(slots * 2);
+        const ids = this.gridIds;
+        let n = 0;
+        let sumR = 0;
+        for (let id = 0; id < slots; id++) {
+            const r = R[id];
+            if (r <= 0) continue;
+            if (SX[id] + r < minX || SX[id] - r > maxX || SY[id] + r < minY || SY[id] - r > maxY) continue;
+            if (!graph.isNodeActive(id)) continue;
+            ids[n++] = id;
+            sumR += r;
+        }
+
+        const w = Math.max(1, maxX - minX);
+        const h = Math.max(1, maxY - minY);
+        const byDensity = Math.sqrt((w * h) / Math.max(1, n));
+        const byDiameter = n > 0 ? (2 * sumR) / n : 0;
+        const cell = Math.min(1024, Math.max(16, byDensity, byDiameter));
+        const cols = Math.ceil(w / cell) + 1;
+        const rows = Math.ceil(h / cell) + 1;
+        const cellCount = cols * rows;
+
+        // Two passes (count, then fill) into flat arrays
+        if (this.gridStart.length < cellCount + 1) this.gridStart = new Int32Array((cellCount + 1) * 2);
+        const start = this.gridStart;
+        start.fill(0, 0, cellCount + 1);
+
+        // Cell range covered by a node: [x0, x1, y0, y1]
+        const sp = this.gridSpan;
+        const span = (id: number) => {
+            const r = R[id];
+            sp[0] = Math.max(0, Math.floor((SX[id] - r - minX) / cell));
+            sp[1] = Math.min(cols - 1, Math.floor((SX[id] + r - minX) / cell));
+            sp[2] = Math.max(0, Math.floor((SY[id] - r - minY) / cell));
+            sp[3] = Math.min(rows - 1, Math.floor((SY[id] + r - minY) / cell));
+        };
+
+        let total = 0;
+        for (let i = 0; i < n; i++) {
+            span(ids[i]);
+            for (let cy = sp[2]; cy <= sp[3]; cy++) {
+                for (let cx = sp[0]; cx <= sp[1]; cx++) start[cy * cols + cx + 1]++;
+            }
+            total += (sp[1] - sp[0] + 1) * (sp[3] - sp[2] + 1);
+        }
+        for (let c = 0; c < cellCount; c++) start[c + 1] += start[c];
+
+        if (this.gridItems.length < total) this.gridItems = new Int32Array(total * 2);
+        const items = this.gridItems;
+        const fill = start.slice(0, cellCount);
+        for (let i = 0; i < n; i++) {
+            const id = ids[i];
+            span(id);
+            for (let cy = sp[2]; cy <= sp[3]; cy++) {
+                for (let cx = sp[0]; cx <= sp[1]; cx++) items[fill[cy * cols + cx]++] = id;
+            }
+        }
+
+        return {
+            hits: (x: number, y: number): boolean => {
+                const cx = Math.floor((x - minX) / cell);
+                const cy = Math.floor((y - minY) / cell);
+                if (cx < 0 || cy < 0 || cx >= cols || cy >= rows) return false;
+                const c = cy * cols + cx;
+                for (let k = start[c], end = start[c + 1]; k < end; k++) {
+                    const id = items[k];
+                    const dx = x - SX[id];
+                    const dy = y - SY[id];
+                    if (dx * dx + dy * dy < R[id] * R[id]) return true;
+                }
+                return false;
+            },
+        };
     }
 
     /** Clean up all GPU resources */
     destroy(): void {
         this.stop();
+        if (typeof document !== 'undefined') {
+            document.fonts?.removeEventListener?.('loadingdone', this.onFontsLoaded);
+        }
         this.gpuPositions?.destroy();
         this.gpuColors?.destroy();
         this.gpuSizes?.destroy();
         this.gpuSelection?.destroy();
-        this.gpuEdgeVerts?.destroy();
+        this.gpuEdges?.destroy();
         this.nodeUniformBuffer?.destroy();
         this.edgeUniformBuffer?.destroy();
         this.msaaTexture?.destroy();
@@ -852,4 +1130,14 @@ export class Renderer {
             visibleNodes: 0, visibleEdges: 0,
         };
     }
+}
+
+// -----------------------------------------------------------
+// Helpers
+// -----------------------------------------------------------
+
+/** Pack an RGB color (0-1) into rgba8unorm with alpha = 255 */
+function packColor(r: number, g: number, b: number): number {
+    const to8 = (v: number) => Math.max(0, Math.min(255, Math.round(v * 255)));
+    return (to8(r) | (to8(g) << 8) | (to8(b) << 16) | (255 << 24)) >>> 0;
 }

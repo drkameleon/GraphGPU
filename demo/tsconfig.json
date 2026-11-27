@@ -12,5 +12,5 @@
       "graphgpu": ["../src/index.ts"]
     }
   },
-  "include": ["src/**/*.ts", "../src/**/*.ts"]
+  "include": ["src/**/*.ts", "../src/**/*.ts", "src/globals.d.ts"]
 }

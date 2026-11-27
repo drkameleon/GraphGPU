@@ -48,22 +48,34 @@ export class Camera {
 
     /** Pan by delta in screen pixels */
     pan(dx: number, dy: number): void {
-        this.x -= dx / (this.zoomLevel * this.canvasWidth * 0.5);
+        // One world unit spans zoom * height/2 pixels on BOTH axes
+        // (x is aspect-corrected in update()), so divide by height
+        this.x -= dx / (this.zoomLevel * this.canvasHeight * 0.5);
         this.y += dy / (this.zoomLevel * this.canvasHeight * 0.5);
         this.dirty = true;
     }
 
-    /** Zoom by delta at a screen point */
+    /** Zoom one step (in if delta > 0, out otherwise) at a screen point */
     zoom(delta: number, screenX?: number, screenY?: number): void {
+        this.zoomBy(delta > 0 ? 1.1 : 1 / 1.1, screenX, screenY);
+    }
+
+    /**
+     * Multiply zoom by a factor, keeping the world point under
+     * the given screen position fixed (if any).
+     */
+    zoomBy(factor: number, screenX?: number, screenY?: number): void {
+        if (!(factor > 0) || !Number.isFinite(factor)) return;
+
         const oldZoom = this.zoomLevel;
-        const factor = delta > 0 ? 1.1 : 1 / 1.1;
         this.zoomLevel = Math.max(
             this.zoomMin,
             Math.min(this.zoomMax, this.zoomLevel * factor),
         );
 
         // Zoom toward cursor position
-        if (screenX !== undefined && screenY !== undefined) {
+        if (screenX !== undefined && screenY !== undefined &&
+            Number.isFinite(screenX) && Number.isFinite(screenY)) {
             const worldBefore = this.screenToWorld(screenX, screenY, oldZoom);
             const worldAfter = this.screenToWorld(screenX, screenY, this.zoomLevel);
             this.x += worldBefore[0] - worldAfter[0];

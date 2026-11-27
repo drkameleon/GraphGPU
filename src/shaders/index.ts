@@ -115,6 +115,11 @@ fn fs_node(in: VSOut) -> @location(0) vec4f {
 /**
  * Edge shader - instanced quads between node pairs.
  *
+ * Each instance only carries its endpoint ids and color; node
+ * positions are read from the same storage buffer the nodes are
+ * drawn from, so moving nodes never requires re-uploading edges.
+ * Instances with color alpha 0 are removed slots and get culled.
+ *
  * FIX: The perpendicular vector is now computed in screen-space
  * (aspect-corrected) so that edge width is uniform regardless of
  * the edge's angle.  Previously, the perpendicular was computed
@@ -138,6 +143,7 @@ struct FrameUniforms {
 };
 
 @group(0) @binding(0) var<uniform> frame: FrameUniforms;
+@group(0) @binding(1) var<storage, read> positions: array<vec2f>;
 
 struct VSOut {
   @builtin(position) position: vec4f,
@@ -163,18 +169,26 @@ var<private> ES: array<f32, 6> = array<f32, 6>(-1.0, -1.0, 1.0, 1.0, -1.0, 1.0);
 @vertex
 fn vs_edge(
   @builtin(vertex_index) vi: u32,
-  @location(0) srcPos: vec2f,
-  @location(1) tgtPos: vec2f,
-  @location(2) alpha: f32,
-  @location(3) edgeColor: vec3f,
+  @location(0) ends: vec2u,
+  @location(1) packedColor: vec4f,
 ) -> VSOut {
   let t = ET[vi];
   let s = ES[vi];
-
-  let srcProj = applyCamera(srcPos);
-  let tgtProj = applyCamera(tgtPos);
+  let edgeColor = packedColor.rgb;
 
   var out: VSOut;
+
+  // Removed edge slot: emit a degenerate vertex outside the clip volume
+  if (packedColor.a == 0.0) {
+    out.position = vec4f(2.0, 2.0, 2.0, 1.0);
+    out.alpha = 0.0;
+    out.vEdge = 0.0;
+    out.color = edgeColor;
+    return out;
+  }
+
+  let srcProj = applyCamera(positions[ends.x]);
+  let tgtProj = applyCamera(positions[ends.y]);
 
   // ── Compute perpendicular in screen-space to fix aspect distortion ──
   let aspect = frame.viewport.x / frame.viewport.y;
@@ -209,7 +223,7 @@ fn vs_edge(
   let pos = mix(srcProj, tgtProj, t) + ndcPerp * s * w;
 
   out.position = vec4f(pos, 0.0, 1.0);
-  out.alpha = alpha * frame.edgeOpacity;
+  out.alpha = frame.edgeOpacity;
   out.vEdge = s;  // raw -1 to +1, interpolated across quad face
   out.color = edgeColor;
   return out;
@@ -224,12 +238,21 @@ fn fs_edge(in: VSOut) -> @location(0) vec4f {
 }
 `;
 
-/** GPU Compute shader for vis.js-style force-directed layout */
+/**
+ * GPU Compute shader for vis.js-style force-directed layout.
+ *
+ * Two passes per step:
+ *   cs_forces     one thread per node: repulsion (all pairs, tiled
+ *                 through workgroup memory), springs (the node's own
+ *                 neighbor list, so no two threads write the same
+ *                 node) and central gravity
+ *   cs_integrate  velocity + position update
+ */
 export const FORCE_COMPUTE_SHADER = /* wgsl */ `
 
 struct ForceParams {
   nodeCount: u32,
-  edgeCount: u32,
+  neighborCount: u32,
   gravitationalConstant: f32,  // negative = repulsive (default: -0.25)
   springLength: f32,           // rest length (default: 0.2)
   springConstant: f32,         // Hooke stiffness (default: 0.06)
@@ -245,90 +268,104 @@ struct ForceParams {
 @group(0) @binding(0) var<uniform> params: ForceParams;
 @group(0) @binding(1) var<storage, read_write> positions: array<vec2f>;
 @group(0) @binding(2) var<storage, read_write> velocities: array<vec2f>;
-@group(0) @binding(3) var<storage, read> edges: array<vec2u>;
+// Adjacency (CSR): node i's neighbors are neighbors[offsets[i] .. offsets[i + 1]]
+@group(0) @binding(3) var<storage, read> neighbors: array<u32>;
 @group(0) @binding(4) var<storage, read> sizes: array<f32>;
-
-// Forces buffer: accumulated per node, reset each step
 @group(0) @binding(5) var<storage, read_write> forces: array<vec2f>;
+@group(0) @binding(6) var<storage, read> offsets: array<u32>;
 
-// ── Pass 1: Reset forces to zero ──
-@compute @workgroup_size(64)
-fn cs_reset_forces(@builtin(global_invocation_id) gid: vec3u) {
-  let i = gid.x;
-  if (i >= params.nodeCount) { return; }
-  forces[i] = vec2f(0.0, 0.0);
+const TILE: u32 = 64u;
+var<workgroup> tilePos: array<vec2f, 64>;
+var<workgroup> tileActive: array<u32, 64>;
+
+// Deterministic unit vector for a coincident pair, antisymmetric in (a, b)
+fn pairDirection(a: u32, b: u32) -> vec2f {
+  let lo = min(a, b);
+  let hi = max(a, b);
+  var h = (lo * 0x9E3779B1u) ^ ((hi + 1u) * 0x85EBCA77u);
+  h = (h ^ (h >> 15u)) * 0x2C1B3C6Du;
+  h = h ^ (h >> 13u);
+  let angle = f32(h) / 4294967296.0 * 6.28318530718;
+  let sign = select(-1.0, 1.0, a == lo);
+  return vec2f(cos(angle), sin(angle)) * sign;
 }
 
-// ── Pass 2: Gravitational repulsion (N-body, O(n²)) ──
-// vis.js Barnes-Hut: F = G * m1 * m2 / dist³ (dividing by dist³ gives direction)
+// ── Pass 1: all forces on node i ──
 @compute @workgroup_size(64)
-fn cs_repulsion(@builtin(global_invocation_id) gid: vec3u) {
+fn cs_forces(
+  @builtin(global_invocation_id) gid: vec3u,
+  @builtin(local_invocation_id) lid: vec3u,
+) {
   let i = gid.x;
-  if (i >= params.nodeCount) { return; }
-  if (sizes[i] <= 0.0) { return; }
+  let n = params.nodeCount;
+  let inRange = i < n;
 
-  let pos_i = positions[i];
-  var force = vec2f(0.0, 0.0);
-  let G = params.gravitationalConstant;
-
-  for (var j = 0u; j < params.nodeCount; j++) {
-    if (i == j || sizes[j] <= 0.0) { continue; }
-    var delta = pos_i - positions[j];
-    var dist = length(delta);
-    if (dist < 0.0001) {
-      // Jitter to prevent zero-distance singularity
-      delta = vec2f(f32(i % 7u) * 0.01 - 0.03, f32(j % 7u) * 0.01 - 0.03);
-      dist = length(delta);
-    }
-    // Gravitational force: F = G / dist² (G is negative → repulsive)
-    let forceMag = G / (dist * dist);
-    force -= (delta / dist) * forceMag;
+  var pos_i = vec2f(0.0, 0.0);
+  var isActive = false;
+  if (inRange) {
+    pos_i = positions[i];
+    isActive = sizes[i] > 0.0;
   }
 
-  forces[i] += force;
+  // Repulsion: F = G / dist² (G < 0 → push apart), over all nodes,
+  // one tile of positions at a time through workgroup memory.
+  // Every thread takes part in loading tiles (barriers need uniform flow).
+  var force = vec2f(0.0, 0.0);
+  let G = params.gravitationalConstant;
+  let tiles = (n + TILE - 1u) / TILE;
+  for (var t = 0u; t < tiles; t++) {
+    let j = t * TILE + lid.x;
+    if (j < n) {
+      tilePos[lid.x] = positions[j];
+      tileActive[lid.x] = select(0u, 1u, sizes[j] > 0.0);
+    } else {
+      tileActive[lid.x] = 0u;
+    }
+    workgroupBarrier();
+
+    if (isActive) {
+      for (var k = 0u; k < TILE; k++) {
+        let jj = t * TILE + k;
+        if (jj == i || tileActive[k] == 0u) { continue; }
+        var delta = pos_i - tilePos[k];
+        var dist = length(delta);
+        if (dist < 0.0001) {
+          // Coincident: push apart along a fixed per-pair direction
+          dist = 0.01;
+          delta = pairDirection(i, jj) * dist;
+        }
+        force -= (delta / dist) * (G / (dist * dist));
+      }
+    }
+    workgroupBarrier();
+  }
+
+  if (!inRange) { return; }
+  if (!isActive) {
+    forces[i] = vec2f(0.0, 0.0);
+    return;
+  }
+
+  // Springs (Hooke's law with rest length), from i's own neighbor list
+  // vis.js: springForce = springConstant * (springLength - distance) / distance
+  let end = offsets[i + 1u];
+  for (var e = offsets[i]; e < end; e++) {
+    let j = neighbors[e];
+    if (sizes[j] <= 0.0) { continue; }
+    let delta = pos_i - positions[j];
+    let dist = max(length(delta), 0.0001);
+    force += delta * (params.springConstant * (params.springLength - dist) / dist);
+  }
+
+  // Central gravity — vis.js: gravityForce = centralGravity / distance
+  let toCenter = -pos_i;
+  let dc = max(length(toCenter), 0.0001);
+  force += toCenter * (params.centralGravity / dc);
+
+  forces[i] = force;
 }
 
-// ── Pass 3: Spring attraction along edges (Hooke's law) ──
-// vis.js: springForce = springConstant * (springLength - distance) / distance
-@compute @workgroup_size(64)
-fn cs_attraction(@builtin(global_invocation_id) gid: vec3u) {
-  let e = gid.x;
-  if (e >= params.edgeCount) { return; }
-
-  let edge = edges[e];
-  let src = edge.x;
-  let tgt = edge.y;
-  if (sizes[src] <= 0.0 || sizes[tgt] <= 0.0) { return; }
-
-  let delta = positions[src] - positions[tgt];
-  let dist = max(length(delta), 0.0001);
-
-  // Hooke's law with rest length
-  let springForce = params.springConstant * (params.springLength - dist) / dist;
-  let fx = delta * springForce;
-
-  // Note: data races on force writes are acceptable for force-directed layout.
-  // The small errors are equivalent to noise and don't affect convergence.
-  forces[src] += fx;
-  forces[tgt] -= fx;
-}
-
-// ── Pass 4: Central gravity ──
-// vis.js: gravityForce = centralGravity / distance (toward origin)
-@compute @workgroup_size(64)
-fn cs_gravity(@builtin(global_invocation_id) gid: vec3u) {
-  let i = gid.x;
-  if (i >= params.nodeCount) { return; }
-  if (sizes[i] <= 0.0) { return; }
-
-  let pos = positions[i];
-  let toCenter = -pos;
-  let dist = max(length(toCenter), 0.0001);
-  let gForce = params.centralGravity / dist;
-  forces[i] += toCenter * gForce;
-}
-
-// ── Pass 5: Velocity integration + position update ──
+// ── Pass 2: Velocity integration + position update ──
 // vis.js: a = (F - damping*v) / mass; v += a * dt; x += v * dt
 @compute @workgroup_size(64)
 fn cs_integrate(@builtin(global_invocation_id) gid: vec3u) {

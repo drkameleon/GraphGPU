@@ -21,7 +21,7 @@ const GROWTH_FACTOR = 2;
 const DEFAULT_MAX_NODES = 4096;
 const DEFAULT_MAX_EDGES = 8192;
 
-function growBuffer<T extends Float32Array | Uint32Array>(
+function growBuffer<T extends Float32Array | Uint32Array | Uint8Array>(
     old: T,
     newLength: number,
 ): T {
@@ -29,6 +29,24 @@ function growBuffer<T extends Float32Array | Uint32Array>(
     const next = new Ctor(newLength);
     next.set(old);
     return next;
+}
+
+/**
+ * Pop a reusable slot off a free list, or -1 if there is none.
+ * Entries go stale when the tail shrinks past them (and the slot
+ * may since have been reused sequentially), so skip any slot
+ * that is out of range or already active.
+ */
+function popFreeSlot(
+    free: number[],
+    tags: (string | undefined)[],
+    count: number,
+): number {
+    while (free.length > 0) {
+        const id = free.pop()!;
+        if (id < count && tags[id] === undefined) return id;
+    }
+    return -1;
 }
 
 // -----------------------------------------------------------
@@ -41,10 +59,14 @@ export class Graph {
     colors: Float32Array;      // [r0, g0, b0, a0, r1, ...]
     sizes: Float32Array;       // [s0, s1, ...]
 
+    /** 1 if a node's color was set explicitly (kept on palette changes) */
+    private customColor: Uint8Array;
+
     // --- Node metadata (not uploaded to GPU) ---
     private nodeTags: string[];
     private nodeProperties: Record<string, unknown>[];
-    private nodeCount: number = 0;
+    private nodeCount: number = 0;     // slots in use (highest id + 1)
+    private liveNodes: number = 0;     // active nodes
     private nodeCapacity: number;
 
     // --- Edge SoA buffers ---
@@ -55,7 +77,8 @@ export class Graph {
     // --- Edge metadata ---
     private edgeTags: string[];
     private edgeProperties: Record<string, unknown>[];
-    private edgeCount: number = 0;
+    private edgeCount: number = 0;     // slots in use (highest id + 1)
+    private liveEdges: number = 0;     // active edges
     private edgeCapacity: number;
 
     // --- Free lists for reuse after deletion ---
@@ -70,8 +93,25 @@ export class Graph {
     readonly tagColors: TagColorMap;
 
     // --- Dirty tracking for GPU upload ---
-    dirtyNodes: boolean = true;
+    dirtyNodes: boolean = true;           // anything about nodes (incl. positions)
+    dirtyNodeAttributes: boolean = true;  // colors / sizes (not just positions)
     dirtyEdges: boolean = true;
+
+    /**
+     * Bumped whenever nodes/edges are added or removed (not on
+     * position/color changes), so consumers like the GPU layout
+     * know when to re-upload the graph structure.
+     */
+    structureVersion: number = 0;
+
+    /** Bumped when edge colors change in bulk (e.g. palette switch) */
+    edgeColorVersion: number = 0;
+
+    /**
+     * Position edits made while positions live on the GPU (GPU layout
+     * running): node id → [x, y]. null when not tracking.
+     */
+    private positionEdits: Map<NodeId, [number, number]> | null = null;
 
     // --- Default node size ---
     private defaultNodeSize: number;
@@ -90,6 +130,7 @@ export class Graph {
         this.positions = new Float32Array(this.nodeCapacity * 2);
         this.colors = new Float32Array(this.nodeCapacity * 4);
         this.sizes = new Float32Array(this.nodeCapacity);
+        this.customColor = new Uint8Array(this.nodeCapacity);
         this.nodeTags = new Array(this.nodeCapacity);
         this.nodeProperties = new Array(this.nodeCapacity);
 
@@ -110,11 +151,27 @@ export class Graph {
 
     /** Number of active nodes */
     get numNodes(): number {
-        return this.nodeCount;
+        return this.liveNodes;
     }
 
     /** Number of active edges */
     get numEdges(): number {
+        return this.liveEdges;
+    }
+
+    /**
+     * Number of node slots in use (highest node id + 1), including
+     * removed ones. This is the extent of the node buffers.
+     */
+    get nodeSlots(): number {
+        return this.nodeCount;
+    }
+
+    /**
+     * Number of edge slots in use (highest edge id + 1), including
+     * removed ones. This is the extent of the edge buffers.
+     */
+    get edgeSlots(): number {
         return this.edgeCount;
     }
 
@@ -122,8 +179,9 @@ export class Graph {
     addNode(input: NodeInput): NodeId {
         let id: NodeId;
 
-        if (this.freeNodes.length > 0) {
-            id = this.freeNodes.pop()!;
+        const free = popFreeSlot(this.freeNodes, this.nodeTags, this.nodeCount);
+        if (free >= 0) {
+            id = free;
         } else {
             id = this.nodeCount;
             if (id >= this.nodeCapacity) {
@@ -132,12 +190,15 @@ export class Graph {
         }
 
         this.nodeCount = Math.max(this.nodeCount, id + 1);
+        this.liveNodes++;
+        this.structureVersion++;
 
         // Position
         const px = input.x ?? (Math.random() - 0.5) * 2;
         const py = input.y ?? (Math.random() - 0.5) * 2;
         this.positions[id * 2] = px;
         this.positions[id * 2 + 1] = py;
+        this.positionEdits?.set(id, [px, py]);
 
         // Size
         this.sizes[id] = input.size ?? this.defaultNodeSize;
@@ -148,12 +209,14 @@ export class Graph {
             ? parseColor(input.color)
             : tagColor.bg;
         writeColorToBuffer(this.colors, id * 4, color);
+        this.customColor[id] = input.color ? 1 : 0;
 
         // Metadata
         this.nodeTags[id] = input.tag;
         this.nodeProperties[id] = input.properties ?? {};
 
         this.dirtyNodes = true;
+        this.dirtyNodeAttributes = true;
         return id;
     }
 
@@ -182,30 +245,31 @@ export class Graph {
         this.colors[id * 4 + 2] = 0;
         this.colors[id * 4 + 3] = 0;
         this.sizes[id] = 0;
+        this.customColor[id] = 0;
 
         // Clear metadata
         this.nodeTags[id] = undefined!;
         this.nodeProperties[id] = undefined!;
 
         this.freeNodes.push(id);
+        this.liveNodes--;
+        this.structureVersion++;
 
         // Shrink nodeCount if we deleted from the tail
         // This avoids iterating/uploading dead trailing slots
         while (this.nodeCount > 0 && this.nodeTags[this.nodeCount - 1] === undefined) {
             this.nodeCount--;
         }
-        // Remove any free-list entries that are now beyond nodeCount
-        // (they'll be naturally reassigned by addNode's sequential path)
-        if (this.freeNodes.length > 0) {
-            this.freeNodes = this.freeNodes.filter(fid => fid < this.nodeCount);
-        }
+        // Free-list entries beyond nodeCount are now stale; they are
+        // skipped lazily by popFreeSlot instead of filtered here (O(1))
 
         this.dirtyNodes = true;
+        this.dirtyNodeAttributes = true;
     }
 
     /** Get a node view (allocates - use sparingly in hot paths) */
     getNode(id: NodeId): Node | null {
-        if (id < 0 || id >= this.nodeCount || !this.nodeTags[id]) return null;
+        if (id < 0 || id >= this.nodeCount || this.nodeTags[id] === undefined) return null;
         return {
             id,
             tag: this.nodeTags[id],
@@ -218,6 +282,16 @@ export class Graph {
             a: this.colors[id * 4 + 3],
             properties: this.nodeProperties[id],
         };
+    }
+
+    /** Get node properties without allocating a view */
+    getNodeProperties(id: NodeId): Record<string, unknown> | undefined {
+        return this.nodeProperties[id];
+    }
+
+    /** Get edge tag without allocating */
+    getEdgeTag(id: EdgeId): string | undefined {
+        return this.edgeTags[id];
     }
 
     /** Get node tag without allocating */
@@ -234,20 +308,48 @@ export class Graph {
     setNodePosition(id: NodeId, x: number, y: number): void {
         this.positions[id * 2] = x;
         this.positions[id * 2 + 1] = y;
+        this.positionEdits?.set(id, [x, y]);
         this.dirtyNodes = true;
         this.dirtyEdges = true;  // edges reference node positions
+    }
+
+    // --- Position edits (while positions live on the GPU) ---
+
+    /** Start/stop recording position edits */
+    trackPositionEdits(enabled: boolean): void {
+        this.positionEdits = enabled ? new Map() : null;
+    }
+
+    /** Take (and clear) the recorded position edits */
+    takePositionEdits(): [NodeId, [number, number]][] {
+        if (!this.positionEdits || this.positionEdits.size === 0) return [];
+        const edits = [...this.positionEdits];
+        this.positionEdits.clear();
+        return edits;
+    }
+
+    /** Re-apply pending edits over positions read back from the GPU */
+    reapplyPositionEdits(): void {
+        if (!this.positionEdits) return;
+        for (const [id, [x, y]] of this.positionEdits) {
+            this.positions[id * 2] = x;
+            this.positions[id * 2 + 1] = y;
+        }
     }
 
     /** Update node color */
     setNodeColor(id: NodeId, color: RGBA): void {
         writeColorToBuffer(this.colors, id * 4, color);
+        this.customColor[id] = 1;
         this.dirtyNodes = true;
+        this.dirtyNodeAttributes = true;
     }
 
     /** Update node size */
     setNodeSize(id: NodeId, size: number): void {
         this.sizes[id] = size;
         this.dirtyNodes = true;
+        this.dirtyNodeAttributes = true;
     }
 
     /** Update node property */
@@ -265,8 +367,9 @@ export class Graph {
     addEdge(input: EdgeInput): EdgeId {
         let id: EdgeId;
 
-        if (this.freeEdges.length > 0) {
-            id = this.freeEdges.pop()!;
+        const free = popFreeSlot(this.freeEdges, this.edgeTags, this.edgeCount);
+        if (free >= 0) {
+            id = free;
         } else {
             id = this.edgeCount;
             if (id >= this.edgeCapacity) {
@@ -275,6 +378,8 @@ export class Graph {
         }
 
         this.edgeCount = Math.max(this.edgeCount, id + 1);
+        this.liveEdges++;
+        this.structureVersion++;
 
         this.edgeIndices[id * 2] = input.source;
         this.edgeIndices[id * 2 + 1] = input.target;
@@ -331,13 +436,12 @@ export class Graph {
         this.edgeProperties[id] = undefined!;
 
         this.freeEdges.push(id);
+        this.liveEdges--;
+        this.structureVersion++;
 
         // Shrink edgeCount if we deleted from the tail
         while (this.edgeCount > 0 && this.edgeTags[this.edgeCount - 1] === undefined) {
             this.edgeCount--;
-        }
-        if (this.freeEdges.length > 0) {
-            this.freeEdges = this.freeEdges.filter(fid => fid < this.edgeCount);
         }
 
         this.dirtyEdges = true;
@@ -376,7 +480,7 @@ export class Graph {
 
     /** Get an edge view */
     getEdge(id: EdgeId): Edge | null {
-        if (id < 0 || id >= this.edgeCount || !this.edgeTags[id]) return null;
+        if (id < 0 || id >= this.edgeCount || this.edgeTags[id] === undefined) return null;
         return {
             id,
             tag: this.edgeTags[id],
@@ -450,7 +554,7 @@ export class Graph {
     getAllTags(): string[] {
         const tags = new Set<string>();
         for (let i = 0; i < this.nodeCount; i++) {
-            if (this.nodeTags[i]) tags.add(this.nodeTags[i]);
+            if (this.nodeTags[i] !== undefined) tags.add(this.nodeTags[i]);
         }
         return [...tags];
     }
@@ -473,27 +577,61 @@ export class Graph {
     clear(): void {
         this.nodeCount = 0;
         this.edgeCount = 0;
+        this.liveNodes = 0;
+        this.liveEdges = 0;
+        this.structureVersion++;
         this.freeNodes.length = 0;
         this.freeEdges.length = 0;
         this.positions.fill(0);
         this.colors.fill(0);
         this.sizes.fill(0);
+        this.customColor.fill(0);
         this.edgeIndices.fill(0);
         this.edgeWeights.fill(0);
+        this.edgeColors.fill(0);
+        this.nodeAdj.clear();
         this.nodeTags.length = 0;
         this.nodeProperties.length = 0;
         this.edgeTags.length = 0;
         this.edgeProperties.length = 0;
         this.tagColors.clear();
         this.dirtyNodes = true;
+        this.dirtyNodeAttributes = true;
+        this.dirtyEdges = true;
+    }
+
+    /**
+     * Re-apply tag colors (e.g. after a palette change) to all nodes
+     * and tagged edges. Nodes with an explicit color keep it.
+     */
+    applyTagColors(): void {
+        for (let id = 0; id < this.nodeCount; id++) {
+            const tag = this.nodeTags[id];
+            if (tag === undefined || this.customColor[id]) continue;
+            writeColorToBuffer(this.colors, id * 4, this.tagColors.getColor(tag).bg);
+        }
+        for (let id = 0; id < this.edgeCount; id++) {
+            const tag = this.edgeTags[id];
+            if (!tag) continue; // removed, or untagged (stays gray)
+            const bg = this.tagColors.getColor(tag).bg;
+            this.edgeColors[id * 3] = bg[0];
+            this.edgeColors[id * 3 + 1] = bg[1];
+            this.edgeColors[id * 3 + 2] = bg[2];
+        }
+        this.edgeColorVersion++;
+        this.dirtyNodes = true;
+        this.dirtyNodeAttributes = true;
         this.dirtyEdges = true;
     }
 
     /** Re-randomize positions of all active nodes (for layout restart) */
     resetPositions(): void {
         for (const id of this.activeNodeIds()) {
-            this.positions[id * 2] = (Math.random() - 0.5) * 2;
-            this.positions[id * 2 + 1] = (Math.random() - 0.5) * 2;
+            const x = (Math.random() - 0.5) * 2;
+            const y = (Math.random() - 0.5) * 2;
+            this.positions[id * 2] = x;
+            this.positions[id * 2 + 1] = y;
+            this.positionEdits?.set(id, [x, y]);
         }
         this.dirtyNodes = true;
         this.dirtyEdges = true; // edges depend on node positions
@@ -508,6 +646,7 @@ export class Graph {
         this.positions = growBuffer(this.positions, newCapacity * 2);
         this.colors = growBuffer(this.colors, newCapacity * 4);
         this.sizes = growBuffer(this.sizes, newCapacity);
+        this.customColor = growBuffer(this.customColor, newCapacity);
         this.nodeTags.length = newCapacity;
         this.nodeProperties.length = newCapacity;
         this.nodeCapacity = newCapacity;

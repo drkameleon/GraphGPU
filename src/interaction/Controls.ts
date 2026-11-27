@@ -1,17 +1,23 @@
 // ============================================================
 // graphGPU - Interaction Controller
 // ============================================================
-// Handles mouse/touch input for pan, zoom, node picking,
-// dragging, and selection. Spatial hit testing via brute
-// force (upgrade to quadtree for >50k nodes).
+// Handles pointer input (mouse, touch, pen) for pan, zoom,
+// node picking, dragging, and selection. Spatial hit testing
+// via brute force (upgrade to quadtree for >50k nodes).
+//
+// Uses Pointer Events with pointer capture, so a drag keeps
+// tracking (and ends properly) even when released outside
+// the canvas.
 // ============================================================
 
 import type { NodeId, InteractionOptions, GraphGPUEventType, GraphGPUEventHandler } from '../types';
 import type { Graph } from '../core/Graph';
+import type { ForceLayout } from '../layout/ForceLayout';
 import { Camera } from '../core/Camera';
 
 interface DragState {
     active: boolean;
+    pointerId: number;
     nodeId: NodeId | null;
     startX: number;
     startY: number;
@@ -20,6 +26,18 @@ interface DragState {
     isPan: boolean;
     moved: boolean;
 }
+
+/** Movement (in canvas pixels) before a press counts as a drag */
+const DRAG_THRESHOLD = 3;
+
+/** Zoom speed per wheel pixel: one ~100px mouse notch ≈ 1.16× */
+const WHEEL_ZOOM_SPEED = 0.0015;
+
+/** Trackpad pinch (wheel + ctrlKey) sends much smaller deltas */
+const PINCH_WHEEL_BOOST = 8;
+
+/** Per-event zoom factor limits, against huge jumps */
+const MAX_WHEEL_FACTOR = 2;
 
 export class InteractionController {
     private canvas: HTMLCanvasElement;
@@ -31,6 +49,7 @@ export class InteractionController {
     // State
     private drag: DragState = {
         active: false,
+        pointerId: -1,
         nodeId: null,
         startX: 0, startY: 0,
         lastX: 0, lastY: 0,
@@ -41,23 +60,21 @@ export class InteractionController {
     private hoveredNode: NodeId | null = null;
     private selectedNodes: Set<NodeId> = new Set();
 
+    /** Active pointers (canvas coords), for pinch-zoom */
+    private pointers = new Map<number, { x: number; y: number }>();
+    private lastPinchDist: number = 0;
+
     // Event listeners
     private listeners = new Map<GraphGPUEventType, Set<GraphGPUEventHandler>>();
 
     // Bound handlers (for cleanup)
-    private boundMouseDown: (e: MouseEvent) => void;
-    private boundMouseMove: (e: MouseEvent) => void;
-    private boundMouseUp: (e: MouseEvent) => void;
+    private boundPointerDown: (e: PointerEvent) => void;
+    private boundPointerMove: (e: PointerEvent) => void;
+    private boundPointerUp: (e: PointerEvent) => void;
+    private boundPointerCancel: (e: PointerEvent) => void;
+    private boundPointerLeave: (e: PointerEvent) => void;
     private boundWheel: (e: WheelEvent) => void;
     private boundDblClick: (e: MouseEvent) => void;
-
-    // Touch handlers
-    private boundTouchStart: (e: TouchEvent) => void;
-    private boundTouchMove: (e: TouchEvent) => void;
-    private boundTouchEnd: (e: TouchEvent) => void;
-
-    // Pinch-zoom state
-    private lastPinchDist: number = 0;
 
     constructor(
         canvas: HTMLCanvasElement,
@@ -83,33 +100,26 @@ export class InteractionController {
         };
 
         // Bind handlers
-        this.boundMouseDown = this.onMouseDown.bind(this);
-        this.boundMouseMove = this.onMouseMove.bind(this);
-        this.boundMouseUp = this.onMouseUp.bind(this);
+        this.boundPointerDown = this.onPointerDown.bind(this);
+        this.boundPointerMove = this.onPointerMove.bind(this);
+        this.boundPointerUp = this.onPointerUp.bind(this);
+        this.boundPointerCancel = this.onPointerCancel.bind(this);
+        this.boundPointerLeave = this.onPointerLeave.bind(this);
         this.boundWheel = this.onWheel.bind(this);
         this.boundDblClick = this.onDblClick.bind(this);
-
-        // Touch handlers
-        this.boundTouchStart = this.onTouchStart.bind(this);
-        this.boundTouchMove = this.onTouchMove.bind(this);
-        this.boundTouchEnd = this.onTouchEnd.bind(this);
 
         this.attach();
     }
 
     /** Attach event listeners to canvas */
     attach(): void {
-        this.canvas.addEventListener('mousedown', this.boundMouseDown);
-        this.canvas.addEventListener('mousemove', this.boundMouseMove);
-        this.canvas.addEventListener('mouseup', this.boundMouseUp);
+        this.canvas.addEventListener('pointerdown', this.boundPointerDown);
+        this.canvas.addEventListener('pointermove', this.boundPointerMove);
+        this.canvas.addEventListener('pointerup', this.boundPointerUp);
+        this.canvas.addEventListener('pointercancel', this.boundPointerCancel);
+        this.canvas.addEventListener('pointerleave', this.boundPointerLeave);
         this.canvas.addEventListener('wheel', this.boundWheel, { passive: false });
         this.canvas.addEventListener('dblclick', this.boundDblClick);
-
-        // Touch events
-        this.canvas.addEventListener('touchstart', this.boundTouchStart, { passive: false });
-        this.canvas.addEventListener('touchmove', this.boundTouchMove, { passive: false });
-        this.canvas.addEventListener('touchend', this.boundTouchEnd);
-        this.canvas.addEventListener('touchcancel', this.boundTouchEnd);
 
         this.canvas.style.cursor = 'grab';
         // Prevent browser's default touch behaviors (scroll, zoom)
@@ -118,16 +128,13 @@ export class InteractionController {
 
     /** Detach event listeners */
     detach(): void {
-        this.canvas.removeEventListener('mousedown', this.boundMouseDown);
-        this.canvas.removeEventListener('mousemove', this.boundMouseMove);
-        this.canvas.removeEventListener('mouseup', this.boundMouseUp);
+        this.canvas.removeEventListener('pointerdown', this.boundPointerDown);
+        this.canvas.removeEventListener('pointermove', this.boundPointerMove);
+        this.canvas.removeEventListener('pointerup', this.boundPointerUp);
+        this.canvas.removeEventListener('pointercancel', this.boundPointerCancel);
+        this.canvas.removeEventListener('pointerleave', this.boundPointerLeave);
         this.canvas.removeEventListener('wheel', this.boundWheel);
         this.canvas.removeEventListener('dblclick', this.boundDblClick);
-
-        this.canvas.removeEventListener('touchstart', this.boundTouchStart);
-        this.canvas.removeEventListener('touchmove', this.boundTouchMove);
-        this.canvas.removeEventListener('touchend', this.boundTouchEnd);
-        this.canvas.removeEventListener('touchcancel', this.boundTouchEnd);
     }
 
     /** Register an event handler */
@@ -159,7 +166,7 @@ export class InteractionController {
 
     // Animated mode: layout ref for pin/unpin during drag
     private animatedMode: boolean = false;
-    private animatedLayout: import('../layout/ForceLayout').ForceLayout | null = null;
+    private animatedLayout: ForceLayout | null = null;
 
     /** Toggle multi-select always-on mode */
     setMultiSelectEnabled(enabled: boolean): void {
@@ -167,9 +174,14 @@ export class InteractionController {
     }
 
     /** Set animated mode + provide layout reference for pin/unpin */
-    setAnimatedMode(enabled: boolean, layout: import('../layout/ForceLayout').ForceLayout | null): void {
+    setAnimatedMode(enabled: boolean, layout: ForceLayout | null): void {
         this.animatedMode = enabled;
         this.animatedLayout = layout;
+    }
+
+    /** Update node scale (must match the renderer's, for hit testing) */
+    setNodeScale(scale: number): void {
+        this.nodeScale = scale;
     }
 
     /** Get currently hovered node */
@@ -211,24 +223,51 @@ export class InteractionController {
     }
 
     // =========================================================
-    // Mouse handlers
+    // Pointer handlers
     // =========================================================
 
+    /**
+     * Event position in canvas pixels. The scale comes from the canvas
+     * itself (backing size / CSS size), so it always matches what the
+     * renderer draws, whatever pixel ratio was configured.
+     */
     private getCanvasCoords(e: MouseEvent): [number, number] {
         const rect = this.canvas.getBoundingClientRect();
-        const ratio = window.devicePixelRatio;
+        const scaleX = rect.width > 0 ? this.canvas.width / rect.width : 1;
+        const scaleY = rect.height > 0 ? this.canvas.height / rect.height : 1;
         return [
-            (e.clientX - rect.left) * ratio,
-            (e.clientY - rect.top) * ratio,
+            (e.clientX - rect.left) * scaleX,
+            (e.clientY - rect.top) * scaleY,
         ];
     }
 
-    private onMouseDown(e: MouseEvent): void {
+    private onPointerDown(e: PointerEvent): void {
+        // Only the primary (left) mouse button; touch & pen report 0 too
+        if (e.button !== 0) return;
+        e.preventDefault();
+
         const [sx, sy] = this.getCanvasCoords(e);
+        this.pointers.set(e.pointerId, { x: sx, y: sy });
+
+        // Keep receiving this pointer's events outside the canvas
+        try {
+            this.canvas.setPointerCapture(e.pointerId);
+        } catch {
+            // Synthetic events have no active pointer to capture
+        }
+
+        if (this.pointers.size === 2) {
+            // Second finger: switch to pinch-zoom, cancel any drag
+            this.lastPinchDist = this.pinchDistance();
+            this.cancelDrag();
+            return;
+        }
+        if (this.pointers.size > 2) return;
 
         const hitNode = this.opts.dragNodes ? this.hitTest(sx, sy) : null;
 
         this.drag.active = true;
+        this.drag.pointerId = e.pointerId;
         this.drag.startX = sx;
         this.drag.startY = sy;
         this.drag.lastX = sx;
@@ -249,213 +288,121 @@ export class InteractionController {
         }
     }
 
-    private onMouseMove(e: MouseEvent): void {
+    private onPointerMove(e: PointerEvent): void {
         const [sx, sy] = this.getCanvasCoords(e);
 
-        if (this.drag.active) {
-            const dx = sx - this.drag.lastX;
-            const dy = sy - this.drag.lastY;
-            const totalDx = Math.abs(sx - this.drag.startX);
-            const totalDy = Math.abs(sy - this.drag.startY);
+        if (this.pointers.has(e.pointerId)) {
+            this.pointers.set(e.pointerId, { x: sx, y: sy });
+        }
 
-            if (totalDx > 3 || totalDy > 3) {
-                this.drag.moved = true;
-            }
+        // Pinch-zoom
+        if (this.pointers.size === 2) {
+            if (this.opts.zoom) this.onPinch();
+            return;
+        }
 
-            if (this.drag.isPan && this.opts.pan) {
-                if (this.drag.moved) this.canvas.style.cursor = 'grabbing';
-                this.camera.pan(dx, dy);
-                this.emit('canvas:pan', this.camera.getState());
-            } else if (this.drag.nodeId !== null && this.opts.dragNodes) {
-                this.canvas.style.cursor = 'grabbing';
-                // Move node in world space
-                const [wx1, wy1] = this.camera.screenToWorld(this.drag.lastX, this.drag.lastY);
-                const [wx2, wy2] = this.camera.screenToWorld(sx, sy);
-                const id = this.drag.nodeId;
-                const ddx = wx2 - wx1;
-                const ddy = wy2 - wy1;
-                const newX = this.graph.positions[id * 2] + ddx;
-                const newY = this.graph.positions[id * 2 + 1] + ddy;
-                this.graph.setNodePosition(id, newX, newY);
-
-                this.emit('node:drag', this.graph.getNode(id));
-            }
-
-            this.drag.lastX = sx;
-            this.drag.lastY = sy;
-        } else if (this.opts.hover) {
-            // Hover detection
-            const hitNode = this.hitTest(sx, sy);
-
-            if (hitNode !== this.hoveredNode) {
-                if (this.hoveredNode !== null) {
-                    this.emit('node:hoverout', this.graph.getNode(this.hoveredNode));
-                }
-                this.hoveredNode = hitNode;
-                if (hitNode !== null) {
-                    this.emit('node:hover', this.graph.getNode(hitNode));
-                    this.canvas.style.cursor = 'pointer';
-                } else {
-                    this.canvas.style.cursor = 'grab';
-                }
-            }
+        if (this.drag.active && e.pointerId === this.drag.pointerId) {
+            this.onDrag(sx, sy);
+        } else if (!this.drag.active && this.opts.hover && e.pointerType !== 'touch') {
+            this.updateHover(this.hitTest(sx, sy));
         }
     }
 
-    private onMouseUp(_e: MouseEvent): void {
-        if (this.drag.active) {
-            const isClick = !this.drag.moved;
+    private onPointerUp(e: PointerEvent): void {
+        this.releasePointer(e);
 
-            if (this.drag.nodeId !== null) {
-                // In animated mode, unpin the node so it rejoins physics
-                if (this.animatedMode && this.animatedLayout) {
-                    this.animatedLayout.unpin(this.drag.nodeId);
-                }
-                this.emit('node:dragend', this.graph.getNode(this.drag.nodeId));
+        if (!this.drag.active || e.pointerId !== this.drag.pointerId) return;
 
-                // Selection happens on mouseUp (click without drag)
-                if (isClick && this.opts.selection) {
-                    const id = this.drag.nodeId;
-                    const isMulti = this.alwaysMultiSelect || _e.shiftKey;
+        const isClick = !this.drag.moved;
 
-                    if (isMulti) {
-                        if (this.selectedNodes.has(id)) {
-                            this.selectedNodes.delete(id);
-                            this.emit('node:deselect', this.graph.getNode(id));
-                        } else {
-                            this.selectedNodes.add(id);
-                            this.emit('node:select', this.graph.getNode(id));
-                        }
+        if (this.drag.nodeId !== null) {
+            const id = this.drag.nodeId;
+            this.unpinDragged();
+            if (this.drag.moved) {
+                this.emit('node:dragend', this.graph.getNode(id), e);
+            }
+
+            // Selection happens on release (click without drag)
+            if (isClick && this.opts.selection) {
+                const isMulti = this.alwaysMultiSelect || e.shiftKey;
+
+                if (isMulti) {
+                    if (this.selectedNodes.has(id)) {
+                        this.selectedNodes.delete(id);
+                        this.emit('node:deselect', this.graph.getNode(id), e);
                     } else {
-                        // Deselect all others
-                        for (const prev of this.selectedNodes) {
-                            if (prev !== id) this.emit('node:deselect', this.graph.getNode(prev));
-                        }
-                        this.selectedNodes.clear();
                         this.selectedNodes.add(id);
-                        this.emit('node:select', this.graph.getNode(id));
+                        this.emit('node:select', this.graph.getNode(id), e);
                     }
-
-                    this.emit('node:click', this.graph.getNode(id));
-                }
-            } else {
-                if (isClick) {
-                    // Clicked empty canvas - deselect all
-                    if (this.opts.selection) {
-                        for (const id of this.selectedNodes) {
-                            this.emit('node:deselect', this.graph.getNode(id));
-                        }
-                        this.selectedNodes.clear();
+                } else {
+                    // Deselect all others
+                    for (const prev of this.selectedNodes) {
+                        if (prev !== id) this.emit('node:deselect', this.graph.getNode(prev), e);
                     }
-                    this.emit('canvas:click', null);
+                    this.selectedNodes.clear();
+                    this.selectedNodes.add(id);
+                    this.emit('node:select', this.graph.getNode(id), e);
                 }
             }
 
-            this.drag.active = false;
-            this.drag.nodeId = null;
-            this.canvas.style.cursor = this.hoveredNode !== null ? 'pointer' : 'grab';
+            if (isClick) this.emit('node:click', this.graph.getNode(id), e);
+        } else if (isClick) {
+            // Clicked empty canvas - deselect all
+            if (this.opts.selection) {
+                for (const id of this.selectedNodes) {
+                    this.emit('node:deselect', this.graph.getNode(id), e);
+                }
+                this.selectedNodes.clear();
+            }
+            this.emit('canvas:click', null, e);
+        }
+
+        this.resetDrag();
+    }
+
+    private onPointerCancel(e: PointerEvent): void {
+        this.releasePointer(e);
+        if (this.drag.active && e.pointerId === this.drag.pointerId) {
+            this.cancelDrag();
+        }
+    }
+
+    private onPointerLeave(e: PointerEvent): void {
+        // Captured pointers keep reporting; only clear plain hover
+        if (!this.drag.active && e.pointerType !== 'touch') {
+            this.updateHover(null);
         }
     }
 
     // =========================================================
-    // Touch handlers
+    // Gestures
     // =========================================================
 
-    private getTouchCanvasCoords(touch: Touch): [number, number] {
-        const rect = this.canvas.getBoundingClientRect();
-        const ratio = window.devicePixelRatio;
-        return [
-            (touch.clientX - rect.left) * ratio,
-            (touch.clientY - rect.top) * ratio,
-        ];
-    }
-
-    private onTouchStart(e: TouchEvent): void {
-        e.preventDefault();
-
-        if (e.touches.length === 2) {
-            // Start pinch-zoom
-            const dx = e.touches[1].clientX - e.touches[0].clientX;
-            const dy = e.touches[1].clientY - e.touches[0].clientY;
-            this.lastPinchDist = Math.hypot(dx, dy);
-            // Cancel any active single-finger drag
-            this.drag.active = false;
-            this.drag.nodeId = null;
-            return;
-        }
-
-        if (e.touches.length !== 1) return;
-
-        const [sx, sy] = this.getTouchCanvasCoords(e.touches[0]);
-        const hitNode = this.opts.dragNodes ? this.hitTest(sx, sy) : null;
-
-        this.drag.active = true;
-        this.drag.startX = sx;
-        this.drag.startY = sy;
-        this.drag.lastX = sx;
-        this.drag.lastY = sy;
-        this.drag.moved = false;
-
-        if (hitNode !== null) {
-            this.drag.nodeId = hitNode;
-            this.drag.isPan = false;
-            if (this.animatedMode && this.animatedLayout) {
-                this.animatedLayout.pin(hitNode);
-            }
-        } else {
-            this.drag.nodeId = null;
-            this.drag.isPan = true;
-        }
-    }
-
-    private onTouchMove(e: TouchEvent): void {
-        e.preventDefault();
-
-        if (e.touches.length === 2 && this.opts.zoom) {
-            // Pinch-zoom
-            const dx = e.touches[1].clientX - e.touches[0].clientX;
-            const dy = e.touches[1].clientY - e.touches[0].clientY;
-            const dist = Math.hypot(dx, dy);
-
-            if (this.lastPinchDist > 0) {
-                const delta = (dist - this.lastPinchDist) * 3; // sensitivity
-                // Zoom toward midpoint of two fingers
-                const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
-                const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
-                const rect = this.canvas.getBoundingClientRect();
-                const ratio = window.devicePixelRatio;
-                const sx = (midX - rect.left) * ratio;
-                const sy = (midY - rect.top) * ratio;
-                this.camera.zoom(delta, sx, sy);
-                this.emit('canvas:zoom', this.camera.getState());
-            }
-            this.lastPinchDist = dist;
-            return;
-        }
-
-        if (e.touches.length !== 1 || !this.drag.active) return;
-
-        const [sx, sy] = this.getTouchCanvasCoords(e.touches[0]);
+    private onDrag(sx: number, sy: number): void {
         const dx = sx - this.drag.lastX;
         const dy = sy - this.drag.lastY;
-        const totalDx = Math.abs(sx - this.drag.startX);
-        const totalDy = Math.abs(sy - this.drag.startY);
 
-        if (totalDx > 3 || totalDy > 3) {
+        if (!this.drag.moved &&
+            (Math.abs(sx - this.drag.startX) > DRAG_THRESHOLD ||
+             Math.abs(sy - this.drag.startY) > DRAG_THRESHOLD)) {
             this.drag.moved = true;
+            if (this.drag.nodeId !== null) {
+                this.emit('node:dragstart', this.graph.getNode(this.drag.nodeId));
+            }
         }
 
         if (this.drag.isPan && this.opts.pan) {
+            if (this.drag.moved) this.canvas.style.cursor = 'grabbing';
             this.camera.pan(dx, dy);
             this.emit('canvas:pan', this.camera.getState());
-        } else if (this.drag.nodeId !== null && this.opts.dragNodes) {
+        } else if (this.drag.nodeId !== null && this.opts.dragNodes && this.drag.moved) {
+            this.canvas.style.cursor = 'grabbing';
+            // Move node in world space
             const [wx1, wy1] = this.camera.screenToWorld(this.drag.lastX, this.drag.lastY);
             const [wx2, wy2] = this.camera.screenToWorld(sx, sy);
             const id = this.drag.nodeId;
-            const ddx = wx2 - wx1;
-            const ddy = wy2 - wy1;
-            const newX = this.graph.positions[id * 2] + ddx;
-            const newY = this.graph.positions[id * 2 + 1] + ddy;
+            const newX = this.graph.positions[id * 2] + (wx2 - wx1);
+            const newY = this.graph.positions[id * 2 + 1] + (wy2 - wy1);
             this.graph.setNodePosition(id, newX, newY);
 
             this.emit('node:drag', this.graph.getNode(id));
@@ -465,58 +412,97 @@ export class InteractionController {
         this.drag.lastY = sy;
     }
 
-    private onTouchEnd(e: TouchEvent): void {
-        // Reset pinch state when fingers lift
-        if (e.touches.length < 2) {
-            this.lastPinchDist = 0;
+    private onPinch(): void {
+        const dist = this.pinchDistance();
+        if (this.lastPinchDist > 0) {
+            const [a, b] = [...this.pointers.values()];
+            // Zoom by the change in finger distance, toward their midpoint
+            this.camera.zoomBy(dist / this.lastPinchDist, (a.x + b.x) / 2, (a.y + b.y) / 2);
+            this.emit('canvas:zoom', this.camera.getState());
         }
+        this.lastPinchDist = dist;
+    }
 
-        if (e.touches.length > 0) return; // still touching
+    private pinchDistance(): number {
+        const [a, b] = [...this.pointers.values()];
+        return Math.hypot(b.x - a.x, b.y - a.y);
+    }
 
-        if (this.drag.active) {
-            const isClick = !this.drag.moved;
+    private updateHover(hitNode: NodeId | null): void {
+        if (hitNode === this.hoveredNode) return;
 
-            if (this.drag.nodeId !== null) {
-                // Unpin in animated mode
-                if (this.animatedMode && this.animatedLayout) {
-                    this.animatedLayout.unpin(this.drag.nodeId);
-                }
-                this.emit('node:dragend', this.graph.getNode(this.drag.nodeId));
-
-                if (isClick && this.opts.selection) {
-                    const id = this.drag.nodeId;
-                    // Touch always acts as single-select
-                    for (const prev of this.selectedNodes) {
-                        if (prev !== id) this.emit('node:deselect', this.graph.getNode(prev));
-                    }
-                    this.selectedNodes.clear();
-                    this.selectedNodes.add(id);
-                    this.emit('node:select', this.graph.getNode(id));
-                    this.emit('node:click', this.graph.getNode(id));
-                }
-            } else {
-                if (isClick) {
-                    if (this.opts.selection) {
-                        for (const id of this.selectedNodes) {
-                            this.emit('node:deselect', this.graph.getNode(id));
-                        }
-                        this.selectedNodes.clear();
-                    }
-                    this.emit('canvas:click', null);
-                }
-            }
-
-            this.drag.active = false;
-            this.drag.nodeId = null;
+        if (this.hoveredNode !== null) {
+            this.emit('node:hoverout', this.graph.getNode(this.hoveredNode));
+        }
+        this.hoveredNode = hitNode;
+        if (hitNode !== null) {
+            this.emit('node:hover', this.graph.getNode(hitNode));
+            this.canvas.style.cursor = 'pointer';
+        } else {
+            this.canvas.style.cursor = 'grab';
         }
     }
+
+    private releasePointer(e: PointerEvent): void {
+        this.pointers.delete(e.pointerId);
+        if (this.pointers.size < 2) this.lastPinchDist = 0;
+        try {
+            if (this.canvas.hasPointerCapture(e.pointerId)) {
+                this.canvas.releasePointerCapture(e.pointerId);
+            }
+        } catch {
+            // Already released
+        }
+    }
+
+    /** Abort a drag without click/select semantics */
+    private cancelDrag(): void {
+        if (!this.drag.active) return;
+        if (this.drag.nodeId !== null) {
+            const id = this.drag.nodeId;
+            this.unpinDragged();
+            if (this.drag.moved) this.emit('node:dragend', this.graph.getNode(id));
+        }
+        this.resetDrag();
+    }
+
+    private unpinDragged(): void {
+        // In animated mode, unpin the node so it rejoins physics
+        if (this.drag.nodeId !== null && this.animatedMode && this.animatedLayout) {
+            this.animatedLayout.unpin(this.drag.nodeId);
+        }
+    }
+
+    private resetDrag(): void {
+        this.drag.active = false;
+        this.drag.pointerId = -1;
+        this.drag.nodeId = null;
+        this.canvas.style.cursor = this.hoveredNode !== null ? 'pointer' : 'grab';
+    }
+
+    // =========================================================
+    // Wheel & double click
+    // =========================================================
 
     private onWheel(e: WheelEvent): void {
         if (!this.opts.zoom) return;
         e.preventDefault();
 
+        // Normalize to pixels (some mice report lines or pages)
+        let dy = e.deltaY;
+        if (e.deltaMode === 1) dy *= 16;
+        else if (e.deltaMode === 2) dy *= this.canvas.clientHeight || 800;
+        if (e.ctrlKey) dy *= PINCH_WHEEL_BOOST;
+
+        // Proportional to the scroll amount, so trackpads (many tiny
+        // events) and mouse wheels (few big ones) zoom at similar speeds
+        const factor = Math.min(
+            MAX_WHEEL_FACTOR,
+            Math.max(1 / MAX_WHEEL_FACTOR, Math.exp(-dy * WHEEL_ZOOM_SPEED)),
+        );
+
         const [sx, sy] = this.getCanvasCoords(e);
-        this.camera.zoom(-e.deltaY, sx, sy);
+        this.camera.zoomBy(factor, sx, sy);
         this.emit('canvas:zoom', this.camera.getState());
     }
 
@@ -524,7 +510,7 @@ export class InteractionController {
         const [sx, sy] = this.getCanvasCoords(e);
         const hitNode = this.hitTest(sx, sy);
         if (hitNode !== null) {
-            this.emit('node:dblclick', this.graph.getNode(hitNode));
+            this.emit('node:dblclick', this.graph.getNode(hitNode), e);
         }
     }
 

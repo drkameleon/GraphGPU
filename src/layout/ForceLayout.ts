@@ -59,6 +59,7 @@ export class ForceLayout {
     private forces: Float32Array;
     private running: boolean = false;
     private iteration: number = 0;
+    private frameId: number = 0;
 
     /** Barnes-Hut quadtree — reused across ticks (no re-allocation) */
     private quadTree: QuadTree;
@@ -90,7 +91,7 @@ export class ForceLayout {
             maxIterations: opts?.maxIterations ?? DEFAULTS.maxIterations,
         };
 
-        const n = graph.numNodes;
+        const n = graph.nodeSlots;
         this.velocities = new Float32Array(n * 2);
         this.forces = new Float32Array(n * 2);
         this.quadTree = new QuadTree();
@@ -164,13 +165,20 @@ export class ForceLayout {
                 }
             }
 
-            requestAnimationFrame(loop);
+            this.frameId = requestAnimationFrame(loop);
         };
 
-        requestAnimationFrame(loop);
+        this.frameId = requestAnimationFrame(loop);
     }
 
     stop(): void {
+        // Cancel the pending frame, so a quick stop() + start()
+        // can't leave two loops running
+        if (this.frameId) {
+            cancelAnimationFrame(this.frameId);
+            this.frameId = 0;
+        }
+        if (!this.running) return;
         this.running = false;
         this.onStop?.();
     }
@@ -190,17 +198,19 @@ export class ForceLayout {
     // =========================================================
 
     private tick(): number {
-        const n = this.graph.numNodes;
+        // Grow first: nodes may have been added since the last tick,
+        // and the locals below must point at the resized buffers
+        this.ensureBuffers();
+
+        const n = this.graph.nodeSlots;
         const pos = this.graph.positions;
         const vel = this.velocities;
         const forces = this.forces;
         const edgeIdx = this.graph.edgeIndices;
-        const edgeCount = this.graph.numEdges;
+        const edgeCount = this.graph.edgeSlots;
         const sizes = this.graph.sizes;
         const pinned = this.pinned;
         const cfg = this.config;
-
-        this.ensureBuffers();
 
         // Reset forces
         forces.fill(0);
@@ -387,7 +397,7 @@ export class ForceLayout {
     // =========================================================
 
     private ensureBuffers(): void {
-        const needed = this.graph.numNodes * 2;
+        const needed = this.graph.nodeSlots * 2;
         if (this.velocities.length < needed) {
             const oldVel = this.velocities;
             this.velocities = new Float32Array(needed);

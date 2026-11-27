@@ -1,0 +1,85 @@
+name: Benchmarks
+
+on:
+    pull_request:
+        paths:
+            - 'src/**'
+            - 'bench/**'
+            - 'tests/helpers.ts'
+            - 'tests/fake-device.ts'
+            - 'package.json'
+            - 'package-lock.json'
+            - '.github/workflows/bench.yml'
+
+permissions:
+    contents: read
+    pull-requests: write
+
+jobs:
+    bench:
+        name: Benchmark
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 24
+                  cache: npm
+
+            - name: Install dependencies
+              run: npm ci
+
+            - name: Compare against base
+              id: compare
+              run: |
+                  set +e
+                  bash bench/ab.sh ${{ github.event.pull_request.base.sha }} 3 > bench-report.md
+                  echo "status=$?" >> "$GITHUB_OUTPUT"
+                  cat bench-report.md >> "$GITHUB_STEP_SUMMARY"
+                  cat bench-report.md
+
+            # Keeps a single comment per PR, updated on every push.
+            # Fork PRs get a read-only token, so this may be skipped there.
+            - name: Comment on PR
+              continue-on-error: true
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  PR: ${{ github.event.pull_request.number }}
+                  RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+              run: |
+                  MARKER="<!-- graphgpu-benchmarks -->"
+                  {
+                      echo "$MARKER"
+                      cat bench-report.md
+                      echo
+                      echo "<sub>Commit ${{ github.event.pull_request.head.sha }} · [run]($RUN_URL)</sub>"
+                  } > bench-comment.md
+
+                  ID=$(gh api "repos/${{ github.repository }}/issues/$PR/comments" --paginate \
+                      --jq ".[] | select(.body | startswith(\"$MARKER\")) | .id" | head -n 1)
+
+                  if [ -n "$ID" ]; then
+                      gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$ID" -F body=@bench-comment.md > /dev/null
+                  else
+                      gh pr comment "$PR" --body-file bench-comment.md
+                  fi
+
+            - name: Upload results
+              if: always()
+              uses: actions/upload-artifact@v4
+              with:
+                  name: benchmarks
+                  path: bench-*.json
+                  if-no-files-found: ignore
+
+            - name: Check for regressions
+              if: steps.compare.outputs.status != '0'
+              run: |
+                  echo "Benchmarks found a regression (see the table above)."
+                  exit 1

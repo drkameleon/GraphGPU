@@ -1,0 +1,12 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "..",
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "types": ["@webgpu/types", "node"]
+  },
+  "include": ["../src/**/*.ts", "../tests/helpers.ts", "../tests/fake-device.ts", "./**/*.ts"]
+}

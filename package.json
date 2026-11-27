@@ -1,6 +1,6 @@
 {
   "name": "graphgpu",
-  "version": "0.2.0",
+  "version": "0.3.2",
   "description": "Ultra-fast WebGPU graph visualization library",
   "author": "Yanis Zafirópulos <drkameleon>",
   "license": "MIT",
@@ -22,12 +22,22 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:gpu": "deno run --unstable-webgpu --unstable-sloppy-imports --allow-env --allow-read tests/gpu/smoke.ts",
+    "bench": "tsx bench/run.ts",
+    "bench:compare": "bash bench/ab.sh",
     "clean": "rm -rf dist",
     "prepublishOnly": "npm run clean && npm run build"
   },
   "devDependencies": {
+    "@types/node": "^24.19.4",
     "@webgpu/types": "^0.1.40",
-    "typescript": "^5.4.0"
+    "happy-dom": "^21.0.4",
+    "tinybench": "^6.2.5",
+    "tsx": "^4.23.15",
+    "typescript": "^5.4.0",
+    "vitest": "^5.1.2"
   },
   "keywords": [
     "graph",

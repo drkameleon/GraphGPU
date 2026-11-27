@@ -42,6 +42,7 @@ $transition-theme: 0.25s;
 // ============================================================
 
 :root {
+  --brand: #414e74;
   --bg: #f5f5f7;
   --bg-darker: #eaeaee;
   --bg-surface: #ffffff;
@@ -123,11 +124,11 @@ body {
     gap: 7px;
 
     .dot {
-      width: 6px;
-      height: 6px;
+      width: 9px;
+      height: 9px;
       border-radius: 50%;
-      background: var(--accent);
-      box-shadow: 0 0 6px var(--accent);
+      background: var(--brand);
+      box-shadow: 0 0 6px var(--brand);
       animation: pulse 2s ease-in-out infinite;
     }
   }
@@ -351,6 +352,31 @@ body {
     border: 1px solid var(--border);
     color: var(--accent);
     flex-shrink: 0;
+  }
+
+  .github-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    text-decoration: none;
+    color: inherit; 
+    background: rgba(255, 255, 255, 0.1); // Light tint to make it look clickable
+    padding: 4px 8px;
+    border-radius: 4px;
+    transition: background 0.2s, transform 0.1s;
+
+    &:hover {
+      background: rgba(255, 255, 255, 0.2);
+      transform: translateY(-1px);
+    }
+
+    &:active {
+      transform: translateY(0);
+    }
+
+    i {
+      font-size: 1.1em;
+    }
   }
 }
 

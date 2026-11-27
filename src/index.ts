@@ -284,18 +284,29 @@ export class GraphGPU {
         attraction?: number;
         gravity?: number;
     }): void {
+        // Replace (not stack) any running layout, keeping animated mode
+        const wasAnimated = this.layout?.isAnimated() ?? false;
+        this.stopLayout();
+
         this.layout = new ForceLayout(this.graph, {
             type: 'force',
             ...opts,
         });
-        this.layout.start();
+
+        if (wasAnimated) {
+            this.layout.setAnimated(true);
+            this.controls.setAnimatedMode(true, this.layout);
+        } else {
+            this.layout.start();
+        }
     }
 
     /**
-     * Stop the current layout.
+     * Stop the current layout (CPU or GPU).
      */
     stopLayout(): void {
         this.layout?.stop();
+        this.stopGPULayout();
     }
 
     /**
@@ -338,7 +349,8 @@ export class GraphGPU {
             return;
         }
 
-        this.gpuLayout = new GPUForceLayout(device, this.graph, opts);
+        // Shares the renderer's positions buffer: no per-frame copies
+        this.gpuLayout = new GPUForceLayout(device, this.graph, opts, this.renderer);
         await this.gpuLayout.start();
     }
 
@@ -424,25 +436,8 @@ export class GraphGPU {
      */
     setPalette(palette: string | Palette): void {
         this.graph.tagColors.setPalette(palette);
-        // Re-color all existing nodes
-        for (const id of this.graph.activeNodeIds()) {
-            const tag = this.graph.getNodeTag(id);
-            if (tag) {
-                const color = this.graph.tagColors.getColor(tag);
-                this.graph.setNodeColor(id, color.bg);
-            }
-        }
-        // Re-color all existing edges
-        for (const id of this.graph.activeEdgeIds()) {
-            const edge = this.graph.getEdge(id);
-            if (edge?.tag) {
-                const color = this.graph.tagColors.getColor(edge.tag);
-                this.graph.edgeColors[id * 3] = color.bg[0];
-                this.graph.edgeColors[id * 3 + 1] = color.bg[1];
-                this.graph.edgeColors[id * 3 + 2] = color.bg[2];
-            }
-        }
-        this.graph.dirtyEdges = true;
+        // Re-color existing nodes & edges (explicit node colors are kept)
+        this.graph.applyTagColors();
     }
 
     /**
@@ -479,6 +474,7 @@ export class GraphGPU {
      */
     setNodeSize(size: number): void {
         this.renderer.setNodeScale(size);
+        this.controls.setNodeScale(size);
     }
 
     /**
@@ -534,6 +530,8 @@ export class GraphGPU {
                 ...this.options.layout,
             });
         }
+        // The CPU layout drives animated mode: don't run both
+        if (enabled) this.stopGPULayout();
         this.layout.setAnimated(enabled);
         this.controls.setAnimatedMode(enabled, this.layout);
     }
@@ -596,7 +594,17 @@ export class GraphGPU {
      */
     markDirty(): void {
         this.graph.dirtyNodes = true;
+        this.graph.dirtyNodeAttributes = true; // colors/sizes may have been edited too
         this.graph.dirtyEdges = true;
+        this.graph.edgeColorVersion++; // edge buffers may have been edited too
+    }
+
+    /**
+     * Request a redraw. Frames are only drawn when something changed;
+     * call this after changing anything the library can't detect.
+     */
+    requestRender(): void {
+        this.renderer.invalidate();
     }
 
     /**

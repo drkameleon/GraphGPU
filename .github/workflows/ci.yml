@@ -21,7 +21,7 @@ jobs:
 
         strategy:
             matrix:
-                node-version: [18, 20, 22]
+                node-version: [22, 24]
 
         steps:
             - name: Checkout
@@ -37,7 +37,13 @@ jobs:
               run: npm ci
 
             - name: Type-check
-              run: npx tsc --noEmit
+              run: |
+                  npx tsc --noEmit
+                  npx tsc -p tests
+                  npx tsc -p bench
+
+            - name: Run tests
+              run: npm test
 
             - name: Build
               run: npm run build

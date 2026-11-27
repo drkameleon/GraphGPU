@@ -9,4 +9,5 @@ Thumbs.db
 .env.*
 .vite/
 .cache/
-
+bench-*.json
+bench-*.md

@@ -1,20 +1,57 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
+<meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>graphGPU — Demo</title>
+  <title>GraphGPU &middot; WebGPU-accelerated graph visualization</title>
+  
+  <link rel="apple-touch-icon" sizes="57x57" href="/favico/apple-icon-57x57.png">
+  <link rel="apple-touch-icon" sizes="60x60" href="/favico/apple-icon-60x60.png">
+  <link rel="apple-touch-icon" sizes="72x72" href="/favico/apple-icon-72x72.png">
+  <link rel="apple-touch-icon" sizes="76x76" href="/favico/apple-icon-76x76.png">
+  <link rel="apple-touch-icon" sizes="114x114" href="/favico/apple-icon-114x114.png">
+  <link rel="apple-touch-icon" sizes="120x120" href="/favico/apple-icon-120x120.png">
+  <link rel="apple-touch-icon" sizes="144x144" href="/favico/apple-icon-144x144.png">
+  <link rel="apple-touch-icon" sizes="152x152" href="/favico/apple-icon-152x152.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/favico/apple-icon-180x180.png">
+  <link rel="icon" type="image/png" sizes="192x192"  href="/favico/android-icon-192x192.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="/favico/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="96x96" href="/favico/favicon-96x96.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/favico/favicon-16x16.png">
+
+  <meta name="description" content="A WebGPU-accelerated, force-directed graph visualization library">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https:/graphgpu.com">
+  <meta property="og:title" content="GraphGPU">
+  <meta property="og:description" content="A WebGPU-accelerated, force-directed graph visualization library">
+  <meta property="og:image" content="https://graphgpu.com/preview.jpg">
+
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="GraphGPU">
+  <meta name="twitter:description" content="A WebGPU-accelerated, force-directed graph visualization library">
+  <meta name="twitter:image" content="https://graphgpu.com/preview.jpg">
+
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
   <script src="https://unpkg.com/phosphor-icons"></script>
   <link rel="stylesheet" href="/src/style.scss">
+
+  <!-- Google tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-7G4LWPPM6P"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+
+    gtag('config', 'G-7G4LWPPM6P');
+  </script>
 </head>
 <body>
   <div id="app">
     <!-- TOOLBAR -->
     <div class="toolbar" :class="{ light: !darkMode }">
-      <div class="brand"><span class="dot"></span> graphGPU</div>
+      <div class="brand"><span class="dot"></span> GraphGPU</div>
       <div class="sep"></div>
       <button class="btn" :class="{ active: layoutRunning }" @click="toggleLayout">
         <i :class="layoutRunning ? 'ph-pause-bold' : 'ph-play-bold'"></i>
@@ -101,7 +138,13 @@
         <span class="idle-text">{{ nodeCount }} node{{ nodeCount !== 1 ? 's' : '' }} · {{ edgeCount }} edge{{ edgeCount !== 1 ? 's' : '' }}</span>
       </template>
       <div class="spacer"></div>
-      <span class="badge">WebGPU</span>
+      <a href="https://github.com/drkameleon/GraphGPU" 
+        target="_blank" 
+        rel="noopener" 
+        class="badge github-badge">
+        <i class="ph-github-logo"></i>
+        <span>Source Code</span>
+      </a>
     </div>
 
     <!-- TOOLTIP -->
