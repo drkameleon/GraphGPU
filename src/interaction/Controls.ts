@@ -72,6 +72,7 @@ export class InteractionController {
     private gridVersion = -1;
     private gridScale = -1;
     private selectedNodes: Set<NodeId> = new Set();
+    private selectedEdges: Set<EdgeId> = new Set();
 
     /** Active pointers (canvas coords), for pinch-zoom */
     private pointers = new Map<number, { x: number; y: number }>();
@@ -168,10 +169,18 @@ export class InteractionController {
         return new Set(this.selectedNodes);
     }
 
+    /** Get currently selected edges */
+    getSelectedEdges(): Set<EdgeId> {
+        return new Set(this.selectedEdges);
+    }
+
     /** Toggle selection on/off */
     setSelectionEnabled(enabled: boolean): void {
         this.opts.selection = enabled;
-        if (!enabled) this.selectedNodes.clear();
+        if (!enabled) {
+            this.selectedNodes.clear();
+            this.selectedEdges.clear();
+        }
     }
 
     // Multi-select always active (without needing shift)
@@ -273,11 +282,18 @@ export class InteractionController {
         return best;
     }
 
-    /** Edge picking only runs when someone listens to edge events */
-    private wantsEdges(): boolean {
-        return (this.listeners.get('edge:click')?.size ?? 0) > 0 ||
-            (this.listeners.get('edge:hover')?.size ?? 0) > 0 ||
-            (this.listeners.get('edge:hoverout')?.size ?? 0) > 0;
+    private listens(type: GraphGPUEventType): boolean {
+        return (this.listeners.get(type)?.size ?? 0) > 0;
+    }
+
+    /** Edge picking on click: for selection, or edge click listeners */
+    private wantsEdgeClicks(): boolean {
+        return this.opts.selection || this.listens('edge:click');
+    }
+
+    /** Edge picking on hover only runs when someone listens to it */
+    private wantsEdgeHover(): boolean {
+        return this.listens('edge:hover') || this.listens('edge:hoverout');
     }
 
     // =========================================================
@@ -369,7 +385,7 @@ export class InteractionController {
             const node = this.hitTest(sx, sy);
             this.updateHover(node);
             // Edges under nodes don't count
-            this.updateEdgeHover(node === null && this.wantsEdges() ? this.hitTestEdge(sx, sy) : null);
+            this.updateEdgeHover(node === null && this.wantsEdgeHover() ? this.hitTestEdge(sx, sy) : null);
         }
     }
 
@@ -406,7 +422,8 @@ export class InteractionController {
                         this.emit('node:select', this.graph.getNode(id), e);
                     }
                 } else {
-                    // Deselect all others
+                    // Deselect all others (edges too)
+                    this.deselectEdges(e);
                     for (const prev of this.selectedNodes) {
                         if (prev !== id) this.emit('node:deselect', this.graph.getNode(prev), e);
                     }
@@ -425,7 +442,9 @@ export class InteractionController {
                 }
                 this.selectedNodes.clear();
             }
-            const edge = this.wantsEdges() ? this.hitTestEdge(this.drag.startX, this.drag.startY) : null;
+            const edge = this.wantsEdgeClicks() ? this.hitTestEdge(this.drag.startX, this.drag.startY) : null;
+            if (edge !== null && this.opts.selection) this.selectEdge(edge, this.alwaysMultiSelect || e.shiftKey, e);
+            else if (this.opts.selection) this.deselectEdges(e);
             if (edge !== null) this.emit('edge:click', this.graph.getEdge(edge), e);
             else this.emit('canvas:click', null, e);
         }
@@ -516,6 +535,36 @@ export class InteractionController {
             this.canvas.style.cursor = 'pointer';
         } else {
             this.canvas.style.cursor = 'grab';
+        }
+    }
+
+    /** Select an edge: alone, or toggled into the selection (multi) */
+    private selectEdge(edge: EdgeId, multi: boolean, e: Event): void {
+        if (multi) {
+            if (this.selectedEdges.delete(edge)) {
+                this.emit('edge:deselect', this.graph.getEdge(edge), e);
+            } else {
+                this.selectedEdges.add(edge);
+                this.emit('edge:select', this.graph.getEdge(edge), e);
+            }
+            return;
+        }
+        for (const other of [...this.selectedEdges]) {
+            if (other !== edge) {
+                this.selectedEdges.delete(other);
+                this.emit('edge:deselect', this.graph.getEdge(other) ?? { id: other }, e);
+            }
+        }
+        if (!this.selectedEdges.has(edge)) {
+            this.selectedEdges.add(edge);
+            this.emit('edge:select', this.graph.getEdge(edge), e);
+        }
+    }
+
+    private deselectEdges(e: Event): void {
+        for (const edge of [...this.selectedEdges]) {
+            this.selectedEdges.delete(edge);
+            this.emit('edge:deselect', this.graph.getEdge(edge) ?? { id: edge }, e);
         }
     }
 

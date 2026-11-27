@@ -194,6 +194,8 @@ fn vs_edge(
     out.halfWidth = 0.0;
     return out;
   }
+  // Alpha 128 marks a selected edge (255 = normal)
+  let selected = packedColor.a < 0.9;
 
   let srcProj = applyCamera(positions[ends.x]);
   let tgtProj = applyCamera(positions[ends.y]);
@@ -235,12 +237,15 @@ fn vs_edge(
   if (frame.edgeWidth > 0.0) {
     halfWidthPx = frame.edgeWidth * 0.5;
   }
+  if (selected) {
+    halfWidthPx = halfWidthPx * 2.0 + 1.0;
+  }
   let quadHalf = halfWidthPx + 1.0;
 
   let pos = mix(srcProj, tgtProj, t) + ndcPerp * s * (quadHalf / pxPerUnit);
 
   out.position = vec4f(pos, 0.0, 1.0);
-  out.alpha = frame.edgeOpacity;
+  out.alpha = select(frame.edgeOpacity, 1.0, selected);
   out.vEdge = s * quadHalf;
   out.color = edgeColor;
   out.halfWidth = halfWidthPx;

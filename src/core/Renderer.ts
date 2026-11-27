@@ -544,7 +544,10 @@ export class Renderer implements PositionTarget {
             }
             data[o] = src;
             data[o + 1] = tgt;
-            data[o + 2] = packColor(edgeColors[i * 3], edgeColors[i * 3 + 1], edgeColors[i * 3 + 2]);
+            data[o + 2] = packColor(
+                edgeColors[i * 3], edgeColors[i * 3 + 1], edgeColors[i * 3 + 2],
+                this.selectedEdges.has(i),
+            );
             visible++;
         }
 
@@ -833,6 +836,43 @@ export class Renderer implements PositionTarget {
         }
         this.selectionData[nodeId] = selected ? 1.0 : 0.0;
         this.selectionDirty = true;
+    }
+
+    // Selected edges (drawn wider and fully opaque)
+    private selectedEdges = new Set<number>();
+
+    /** Select / deselect an edge */
+    setEdgeSelection(edgeId: number, selected: boolean): void {
+        if (selected === this.selectedEdges.has(edgeId)) return;
+        if (selected) this.selectedEdges.add(edgeId);
+        else this.selectedEdges.delete(edgeId);
+        this.patchEdgeColor(edgeId);
+        this.invalidate();
+    }
+
+    /** Deselect all edges */
+    clearEdgeSelection(): void {
+        const ids = [...this.selectedEdges];
+        this.selectedEdges.clear();
+        for (const id of ids) this.patchEdgeColor(id);
+        this.invalidate();
+    }
+
+    /**
+     * Update a single edge's color word on the GPU (4 bytes), if the
+     * uploaded edge list is current; otherwise the next full upload
+     * picks the change up anyway.
+     */
+    private patchEdgeColor(id: number): void {
+        if (!this.initialized ||
+            this.uploadedStructure !== this.graph.structureVersion ||
+            this.uploadedEdgeColors !== this.graph.edgeColorVersion ||
+            id >= this.drawnEdges) return;
+        const word = this.edgeData[id * 3 + 2];
+        if (word >>> 24 === 0) return; // removed slot
+        const c = this.graph.edgeColors;
+        this.edgeData[id * 3 + 2] = packColor(c[id * 3], c[id * 3 + 1], c[id * 3 + 2], this.selectedEdges.has(id));
+        this.device.queue.writeBuffer(this.gpuEdges, id * 12 + 8, this.edgeData.buffer as ArrayBuffer, (id * 3 + 2) * 4, 4);
     }
 
     /** Clear all selections */
@@ -1242,9 +1282,11 @@ export class Renderer implements PositionTarget {
 // -----------------------------------------------------------
 
 /** Pack an RGB color (0-1) into rgba8unorm with alpha = 255 */
-function packColor(r: number, g: number, b: number): number {
+function packColor(r: number, g: number, b: number, selected: boolean = false): number {
     const to8 = (v: number) => Math.max(0, Math.min(255, Math.round(v * 255)));
-    return (to8(r) | (to8(g) << 8) | (to8(b) << 16) | (255 << 24)) >>> 0;
+    // Alpha: 255 = normal, 128 = selected (0 = removed slot)
+    const alpha = selected ? 128 : 255;
+    return (to8(r) | (to8(g) << 8) | (to8(b) << 16) | (alpha << 24)) >>> 0;
 }
 
 /** CSS rgba() string from a 0-1 RGBA tuple */
