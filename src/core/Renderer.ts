@@ -929,17 +929,31 @@ export class Renderer implements PositionTarget {
     private labelEdges: Int32Array = new Int32Array(0);
     private labelFonts: string[] = [];
 
-    // Text measurement caches (cleared when they grow too big)
-    private textWidths = new Map<string, number>();
+    // Text measurement caches (cleared when they grow too big). Widths
+    // are keyed font → text, so lookups hash strings that already
+    // exist (and cache their hash) instead of a fresh concatenation.
+    private textWidths = new Map<string, Map<string, number>>();
+    private textWidthCount = 0;
     private truncations = new Map<string, string | null>();
 
     private measure(ctx: CanvasRenderingContext2D, font: string, text: string): number {
-        const key = font + '\u0000' + text;
-        let w = this.textWidths.get(key);
+        let widths = this.textWidths.get(font);
+        if (widths === undefined) {
+            widths = new Map();
+            this.textWidths.set(font, widths);
+        }
+        let w = widths.get(text);
         if (w === undefined) {
-            if (this.textWidths.size > 20000) this.textWidths.clear();
+            if (this.textWidthCount > 20000) {
+                this.textWidths.clear();
+                this.textWidthCount = 0;
+                widths = new Map();
+                this.textWidths.set(font, widths);
+            }
+            if (ctx.font !== font) ctx.font = font;
             w = ctx.measureText(text).width;
-            this.textWidths.set(key, w);
+            widths.set(text, w);
+            this.textWidthCount++;
         }
         return w;
     }
@@ -1036,6 +1050,9 @@ export class Renderer implements PositionTarget {
         const fonts = this.labelFonts;
         let count = 0;
         let qMinX = Infinity, qMinY = Infinity, qMaxX = -Infinity, qMaxY = -Infinity;
+        // Edge fonts mostly repeat (same node sizes): build each string once
+        let lastFontSize = -1;
+        let font = '';
 
         for (let eid = 0; eid < edgeSlots; eid++) {
             const tag = graph.getEdgeTag(eid);
@@ -1050,17 +1067,20 @@ export class Renderer implements PositionTarget {
             const sx = (mx * m[0] + my * m[4] + m[8] + 1) * 0.5 * cw;
             const sy = (-(mx * m[1] + my * m[5] + m[9]) + 1) * 0.5 * ch;
             if (sx < -80 || sx > cw + 80 || sy < -40 || sy > ch + 40) continue;
-            if (Math.hypot(sx2 - sx1, sy2 - sy1) < 40) continue;
+            const dx = sx2 - sx1, dy = sy2 - sy1;
+            if (dx * dx + dy * dy < 40 * 40) continue;
 
-            let angle = Math.atan2(sy2 - sy1, sx2 - sx1);
+            let angle = Math.atan2(dy, dx);
             if (angle > Math.PI / 2) angle -= Math.PI;
             if (angle < -Math.PI / 2) angle += Math.PI;
 
             // Edge font = 65% of what the node label would be WITHOUT the 22px cap
             const avgNodeR = (R[src] + R[tgt]) * 0.5;
             const edgeFontSize = Math.max(7, avgNodeR * 0.28 * 0.65);
-            const font = `500 ${edgeFontSize}px ${family}`;
-            if (lctx.font !== font) lctx.font = font;
+            if (edgeFontSize !== lastFontSize) {
+                font = `500 ${edgeFontSize}px ${family}`;
+                lastFontSize = edgeFontSize;
+            }
 
             const labelOffset = edgeWidthPx * 0.5 + edgeFontSize * 0.55 + 3;
             const textW = this.measure(lctx, font, tag) * 0.5 + 4;
