@@ -352,6 +352,7 @@ export class GraphGPU {
         maxVelocity?: number;
         stepsPerFrame?: number;
         maxIterations?: number;
+        minVelocity?: number;
     }): Promise<void> {
         // Stop any running layout
         this.stopLayout();

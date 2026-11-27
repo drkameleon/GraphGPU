@@ -51,6 +51,13 @@ const DEFAULTS: ForceLayoutConfig = {
     maxIterations: 1000,
 };
 
+/**
+ * Consecutive calm ticks (max velocity below minVelocity) before the
+ * layout counts as settled. A single calm tick isn't enough: velocity
+ * also drops to ~0 at the turning points of an oscillation.
+ */
+const STABLE_TICKS = 10;
+
 export class ForceLayout {
     private config: ForceLayoutConfig;
     // Per-node: vx, vy (interleaved)
@@ -59,6 +66,7 @@ export class ForceLayout {
     private forces: Float32Array;
     private running: boolean = false;
     private iteration: number = 0;
+    private calmTicks: number = 0;
     private frameId: number = 0;
 
     /** Barnes-Hut quadtree — reused across ticks (no re-allocation) */
@@ -132,7 +140,7 @@ export class ForceLayout {
         for (let s = 0; s < steps; s++) {
             maxVel = this.tick();
             this.iteration++;
-            if (!this.animated && maxVel < this.config.minVelocity) break;
+            if (this.settled(maxVel) && !this.animated) break;
         }
         return maxVel;
     }
@@ -140,6 +148,7 @@ export class ForceLayout {
     start(): void {
         if (this.running) return;
         this.running = true;
+        this.calmTicks = 0;
         if (!this.animated) this.iteration = 0;
 
         this.ensureBuffers();
@@ -150,18 +159,17 @@ export class ForceLayout {
 
             // 3 ticks per frame for faster convergence
             let maxVel = 0;
+            let settled = false;
             for (let i = 0; i < 3; i++) {
                 maxVel = this.tick();
                 this.iteration++;
+                settled = this.settled(maxVel);
             }
 
             this.onTick?.(this.iteration, maxVel);
 
             if (!this.animated) {
-                if (
-                    maxVel < this.config.minVelocity ||
-                    this.iteration >= this.config.maxIterations
-                ) {
+                if (settled || this.iteration >= this.config.maxIterations) {
                     this.stop();
                     return;
                 }
@@ -193,6 +201,13 @@ export class ForceLayout {
         this.velocities.fill(0);
         this.forces.fill(0);
         this.iteration = 0;
+        this.calmTicks = 0;
+    }
+
+    /** Track calm ticks; true once the layout has been calm for a while */
+    private settled(maxVel: number): boolean {
+        this.calmTicks = maxVel < this.config.minVelocity ? this.calmTicks + 1 : 0;
+        return this.calmTicks >= STABLE_TICKS;
     }
 
     // =========================================================
