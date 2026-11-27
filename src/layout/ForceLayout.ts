@@ -90,7 +90,7 @@ export class ForceLayout {
             maxIterations: opts?.maxIterations ?? DEFAULTS.maxIterations,
         };
 
-        const n = graph.numNodes;
+        const n = graph.nodeSlots;
         this.velocities = new Float32Array(n * 2);
         this.forces = new Float32Array(n * 2);
         this.quadTree = new QuadTree();
@@ -194,12 +194,12 @@ export class ForceLayout {
         // and the locals below must point at the resized buffers
         this.ensureBuffers();
 
-        const n = this.graph.numNodes;
+        const n = this.graph.nodeSlots;
         const pos = this.graph.positions;
         const vel = this.velocities;
         const forces = this.forces;
         const edgeIdx = this.graph.edgeIndices;
-        const edgeCount = this.graph.numEdges;
+        const edgeCount = this.graph.edgeSlots;
         const sizes = this.graph.sizes;
         const pinned = this.pinned;
         const cfg = this.config;
@@ -389,7 +389,7 @@ export class ForceLayout {
     // =========================================================
 
     private ensureBuffers(): void {
-        const needed = this.graph.numNodes * 2;
+        const needed = this.graph.nodeSlots * 2;
         if (this.velocities.length < needed) {
             const oldVel = this.velocities;
             this.velocities = new Float32Array(needed);
