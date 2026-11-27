@@ -8,12 +8,10 @@
 // labels, fitView) is refreshed by a background readback.
 //
 // Runs the vis.js-style force simulation entirely on the GPU
-// via WebGPU compute shaders:
-//   Pass 1: Reset forces
-//   Pass 2: Gravitational repulsion (N-body, O(n²))
-//   Pass 3: Hooke spring attraction along edges
-//   Pass 4: Central gravity toward origin
-//   Pass 5: Velocity integration (F - damping*v) / mass
+// via WebGPU compute shaders, two passes per step:
+//   cs_forces     repulsion (tiled), springs (per-node adjacency,
+//                 race-free) and central gravity
+//   cs_integrate  velocity + position update
 // ============================================================
 
 import { FORCE_COMPUTE_SHADER } from '../shaders/index';
@@ -72,11 +70,8 @@ export class GPUForceLayout {
     private device: GPUDevice;
     private graph: Graph;
 
-    // Compute pipelines (5 passes)
-    private resetPipeline!: GPUComputePipeline;
-    private repulsionPipeline!: GPUComputePipeline;
-    private attractionPipeline!: GPUComputePipeline;
-    private gravityPipeline!: GPUComputePipeline;
+    // Compute pipelines (2 passes per step)
+    private forcesPipeline!: GPUComputePipeline;
     private integrationPipeline!: GPUComputePipeline;
 
     // GPU Buffers
@@ -84,7 +79,8 @@ export class GPUForceLayout {
     private ownsPositions = true;
     private velocitiesBuffer!: GPUBuffer;
     private forcesBuffer!: GPUBuffer;
-    private edgesBuffer!: GPUBuffer;
+    private neighborsBuffer!: GPUBuffer;   // CSR adjacency: neighbor ids
+    private offsetsBuffer!: GPUBuffer;     // CSR adjacency: per-node start
     private sizesBuffer!: GPUBuffer;
     private paramsBuffer!: GPUBuffer;
     private readbackBuffer!: GPUBuffer;
@@ -108,8 +104,8 @@ export class GPUForceLayout {
 
     // What's currently on the GPU
     private uploadedNodes = 0;
-    private uploadedEdges = 0;
     private uploadedVersion = -1;
+    private uploadedNeighbors = 0;
 
     private target: PositionTarget | null;
     private sharing = false;
@@ -139,6 +135,7 @@ export class GPUForceLayout {
                 { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
                 { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
                 { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+                { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
             ],
         });
 
@@ -146,21 +143,9 @@ export class GPUForceLayout {
             bindGroupLayouts: [this.bindGroupLayout],
         });
 
-        this.resetPipeline = this.device.createComputePipeline({
+        this.forcesPipeline = this.device.createComputePipeline({
             layout: pipelineLayout,
-            compute: { module, entryPoint: 'cs_reset_forces' },
-        });
-        this.repulsionPipeline = this.device.createComputePipeline({
-            layout: pipelineLayout,
-            compute: { module, entryPoint: 'cs_repulsion' },
-        });
-        this.attractionPipeline = this.device.createComputePipeline({
-            layout: pipelineLayout,
-            compute: { module, entryPoint: 'cs_attraction' },
-        });
-        this.gravityPipeline = this.device.createComputePipeline({
-            layout: pipelineLayout,
-            compute: { module, entryPoint: 'cs_gravity' },
+            compute: { module, entryPoint: 'cs_forces' },
         });
         this.integrationPipeline = this.device.createComputePipeline({
             layout: pipelineLayout,
@@ -185,7 +170,8 @@ export class GPUForceLayout {
         if (this.ownsPositions) this.positionsBuffer?.destroy();
         this.velocitiesBuffer?.destroy();
         this.forcesBuffer?.destroy();
-        this.edgesBuffer?.destroy();
+        this.neighborsBuffer?.destroy();
+        this.offsetsBuffer?.destroy();
         this.sizesBuffer?.destroy();
         this.readbackBuffer?.destroy();
 
@@ -205,8 +191,12 @@ export class GPUForceLayout {
             size: nNodes * 2 * 4,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
-        this.edgesBuffer = this.device.createBuffer({
-            size: nEdges * 2 * 4,
+        this.neighborsBuffer = this.device.createBuffer({
+            size: nEdges * 2 * 4, // both directions
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        });
+        this.offsetsBuffer = this.device.createBuffer({
+            size: (nNodes + 1) * 4,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
         this.sizesBuffer = this.device.createBuffer({
@@ -254,9 +244,10 @@ export class GPUForceLayout {
                 { binding: 0, resource: { buffer: this.paramsBuffer } },
                 { binding: 1, resource: { buffer: this.positionsBuffer } },
                 { binding: 2, resource: { buffer: this.velocitiesBuffer } },
-                { binding: 3, resource: { buffer: this.edgesBuffer } },
+                { binding: 3, resource: { buffer: this.neighborsBuffer } },
                 { binding: 4, resource: { buffer: this.sizesBuffer } },
                 { binding: 5, resource: { buffer: this.forcesBuffer } },
+                { binding: 6, resource: { buffer: this.offsetsBuffer } },
             ],
         });
     }
@@ -287,7 +278,7 @@ export class GPUForceLayout {
             );
         }
         this.device.queue.writeBuffer(this.sizesBuffer, 0, this.graph.sizes.buffer, 0, n * 4);
-        this.device.queue.writeBuffer(this.edgesBuffer, 0, this.graph.edgeIndices.buffer, 0, e * 2 * 4);
+        this.uploadAdjacency(n, e);
 
         // Velocities: fresh buffers start at rest, otherwise only
         // the new slots do
@@ -299,8 +290,21 @@ export class GPUForceLayout {
         }
 
         this.uploadedNodes = n;
-        this.uploadedEdges = e;
         this.uploadedVersion = this.graph.structureVersion;
+    }
+
+    /**
+     * Build & upload the per-node neighbor lists (CSR). Each active
+     * edge appears in both endpoints' lists, so every node sums its
+     * own spring forces: no two threads write the same node.
+     */
+    private uploadAdjacency(n: number, e: number): void {
+        const { offsets, neighbors } = buildAdjacency(this.graph, n, e);
+        this.device.queue.writeBuffer(this.offsetsBuffer, 0, offsets);
+        if (neighbors.length > 0) {
+            this.device.queue.writeBuffer(this.neighborsBuffer, 0, neighbors);
+        }
+        this.uploadedNeighbors = neighbors.length;
     }
 
     /** Re-upload if nodes/edges were added or removed since the last upload */
@@ -315,7 +319,7 @@ export class GPUForceLayout {
         const u32 = new Uint32Array(buf);
         const f32 = new Float32Array(buf);
         u32[0] = this.uploadedNodes;
-        u32[1] = this.uploadedEdges;
+        u32[1] = this.uploadedNeighbors;
         f32[2] = this.config.gravitationalConstant;
         f32[3] = this.config.springLength;
         f32[4] = this.config.springConstant;
@@ -327,44 +331,21 @@ export class GPUForceLayout {
         this.device.queue.writeBuffer(this.paramsBuffer, 0, buf);
     }
 
-    private dispatchStep(): void {
-        const n = this.uploadedNodes;
-        const e = this.uploadedEdges;
-        const nodeGroups = Math.ceil(n / WORKGROUP_SIZE);
-        const edgeGroups = Math.ceil(e / WORKGROUP_SIZE);
+    /** Run `steps` simulation steps in a single submit */
+    private dispatchSteps(steps: number): void {
+        const groups = Math.ceil(this.uploadedNodes / WORKGROUP_SIZE);
+        if (groups === 0 || steps <= 0) return;
 
         const encoder = this.device.createCommandEncoder();
-
-        const p1 = encoder.beginComputePass();
-        p1.setPipeline(this.resetPipeline);
-        p1.setBindGroup(0, this.bindGroup);
-        p1.dispatchWorkgroups(nodeGroups);
-        p1.end();
-
-        const p2 = encoder.beginComputePass();
-        p2.setPipeline(this.repulsionPipeline);
-        p2.setBindGroup(0, this.bindGroup);
-        p2.dispatchWorkgroups(nodeGroups);
-        p2.end();
-
-        const p3 = encoder.beginComputePass();
-        p3.setPipeline(this.attractionPipeline);
-        p3.setBindGroup(0, this.bindGroup);
-        p3.dispatchWorkgroups(edgeGroups);
-        p3.end();
-
-        const p4 = encoder.beginComputePass();
-        p4.setPipeline(this.gravityPipeline);
-        p4.setBindGroup(0, this.bindGroup);
-        p4.dispatchWorkgroups(nodeGroups);
-        p4.end();
-
-        const p5 = encoder.beginComputePass();
-        p5.setPipeline(this.integrationPipeline);
-        p5.setBindGroup(0, this.bindGroup);
-        p5.dispatchWorkgroups(nodeGroups);
-        p5.end();
-
+        const pass = encoder.beginComputePass();
+        pass.setBindGroup(0, this.bindGroup);
+        for (let i = 0; i < steps; i++) {
+            pass.setPipeline(this.forcesPipeline);
+            pass.dispatchWorkgroups(groups);
+            pass.setPipeline(this.integrationPipeline);
+            pass.dispatchWorkgroups(groups);
+        }
+        pass.end();
         this.device.queue.submit([encoder.finish()]);
     }
 
@@ -429,10 +410,8 @@ export class GPUForceLayout {
             // The renderer may have reallocated the shared buffer since
             this.refreshSharedBuffer();
             this.syncWithGraph();
-            for (let i = 0; i < this.config.stepsPerFrame; i++) {
-                this.dispatchStep();
-                this.iteration++;
-            }
+            this.dispatchSteps(this.config.stepsPerFrame);
+            this.iteration += this.config.stepsPerFrame;
             if (this.sharing) this.target!.positionsChanged();
 
             // Never wait on the GPU: refresh the CPU copy in the
@@ -480,9 +459,7 @@ export class GPUForceLayout {
         if (this.destroyed) return;
         this.uploadData();
         this.uploadParams();
-        for (let i = 0; i < n; i++) {
-            this.dispatchStep();
-        }
+        this.dispatchSteps(n);
         await this.readbackPositions(this.generation);
     }
 
@@ -502,9 +479,51 @@ export class GPUForceLayout {
         if (this.ownsPositions) this.positionsBuffer?.destroy();
         this.velocitiesBuffer?.destroy();
         this.forcesBuffer?.destroy();
-        this.edgesBuffer?.destroy();
+        this.neighborsBuffer?.destroy();
+        this.offsetsBuffer?.destroy();
         this.sizesBuffer?.destroy();
         this.paramsBuffer?.destroy();
         this.readbackBuffer?.destroy();
     }
+}
+
+// -----------------------------------------------------------
+// Adjacency
+// -----------------------------------------------------------
+
+/**
+ * Per-node neighbor lists in CSR form over the first `n` node slots:
+ * node i's neighbors are neighbors[offsets[i] .. offsets[i + 1]].
+ * Removed edges, self-loops and edges outside `n` are left out.
+ */
+export function buildAdjacency(
+    graph: Graph,
+    n: number,
+    e: number,
+): { offsets: Uint32Array<ArrayBuffer>; neighbors: Uint32Array<ArrayBuffer> } {
+    const idx = graph.edgeIndices;
+    const offsets = new Uint32Array(n + 1);
+
+    const usable = (i: number) => {
+        if (!graph.isEdgeActive(i)) return false;
+        const a = idx[i * 2], b = idx[i * 2 + 1];
+        return a !== b && a < n && b < n;
+    };
+
+    for (let i = 0; i < e; i++) {
+        if (!usable(i)) continue;
+        offsets[idx[i * 2] + 1]++;
+        offsets[idx[i * 2 + 1] + 1]++;
+    }
+    for (let i = 0; i < n; i++) offsets[i + 1] += offsets[i];
+
+    const neighbors = new Uint32Array(offsets[n]);
+    const fill = offsets.slice(0, n) as Uint32Array<ArrayBuffer>;
+    for (let i = 0; i < e; i++) {
+        if (!usable(i)) continue;
+        const a = idx[i * 2], b = idx[i * 2 + 1];
+        neighbors[fill[a]++] = b;
+        neighbors[fill[b]++] = a;
+    }
+    return { offsets, neighbors };
 }

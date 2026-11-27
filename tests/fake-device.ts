@@ -71,7 +71,8 @@ export class FakeBuffer {
 // -----------------------------------------------------------
 
 interface FakeCommands {
-    dispatched: boolean;
+    /** Integration steps dispatched (each moves every node by +1) */
+    dispatched: number;
     rendered: boolean;
     copies: (() => void)[];
 }
@@ -84,7 +85,7 @@ export function fakeDevice(): GPUDevice {
         createShaderModule: () => ({}),
         createBindGroupLayout: () => ({}),
         createPipelineLayout: () => ({}),
-        createComputePipeline: () => ({}),
+        createComputePipeline: (desc: GPUComputePipelineDescriptor) => ({ entryPoint: desc.compute.entryPoint }),
         createRenderPipeline: () => ({}),
         createTexture: () => ({ createView: view, destroy() {} }),
         createBindGroup: (desc: GPUBindGroupDescriptor) => {
@@ -96,12 +97,16 @@ export function fakeDevice(): GPUDevice {
         },
         createBuffer: (desc: GPUBufferDescriptor) => new FakeBuffer(desc.size),
         createCommandEncoder: () => {
-            const cmd: FakeCommands = { dispatched: false, rendered: false, copies: [] };
+            const cmd: FakeCommands = { dispatched: 0, rendered: false, copies: [] };
+            let pipeline: { entryPoint?: string } = {};
             return {
                 beginComputePass: () => ({
-                    setPipeline() {},
+                    setPipeline(p: { entryPoint?: string }) { pipeline = p; },
                     setBindGroup() {},
-                    dispatchWorkgroups() { cmd.dispatched = true; },
+                    dispatchWorkgroups() {
+                        // Shaders without a separate integrate pass count every dispatch
+                        if (pipeline.entryPoint === undefined || pipeline.entryPoint === 'cs_integrate') cmd.dispatched++;
+                    },
                     end() {},
                 }),
                 beginRenderPass: () => {
@@ -142,9 +147,9 @@ export function fakeDevice(): GPUDevice {
             },
             submit(cmds: FakeCommands[]) {
                 for (const cmd of cmds) {
-                    if (cmd.dispatched && positions) {
+                    if (cmd.dispatched > 0 && positions) {
                         const f = new Float32Array(positions.data);
-                        for (let i = 0; i < f.length; i++) f[i] += 1;
+                        for (let i = 0; i < f.length; i++) f[i] += cmd.dispatched;
                     }
                     if (cmd.rendered) gpu.renderPasses++;
                     for (const copy of cmd.copies) copy();
