@@ -19,8 +19,11 @@ import { parseColor } from '../utils/color';
 // NodeUniforms: camera (3×vec4) + viewport (vec2) + time (f32) + nodeScale (f32)
 const NODE_UNIFORM_SIZE = 4 * (12 + 2 + 1 + 1); // 64 bytes
 
-// EdgeUniforms: camera (3×vec4) + viewport (vec2) + edgeOpacity (f32) + nodeScale (f32)
-const EDGE_UNIFORM_SIZE = 4 * (12 + 2 + 1 + 1); // 64 bytes
+// EdgeUniforms: camera (3×vec4) + viewport (vec2) + edgeOpacity + nodeScale
+//               + edgeWidth (+ 3 pad)
+const EDGE_UNIFORM_SIZE = 4 * (12 + 2 + 1 + 1 + 4); // 80 bytes
+
+const DEFAULT_FONT_FAMILY = '-apple-system,"Segoe UI",Helvetica,Arial,sans-serif';
 
 export class Renderer implements PositionTarget {
     private device!: GPUDevice;
@@ -87,6 +90,9 @@ export class Renderer implements PositionTarget {
     private resizeObserver: ResizeObserver | null = null;
     private animationId: number = 0;
     private labelsVisible: boolean = true;
+    private labelColor: string | null = null;
+    private edgeUniforms = new Float32Array(EDGE_UNIFORM_SIZE / 4);
+    private edgeWidth: number = 0; // CSS px, 0 = scale with nodes
 
     // Positions owned by the GPU layout (shared buffer, no CPU uploads)
     private externalPositions: boolean = false;
@@ -111,6 +117,12 @@ export class Renderer implements PositionTarget {
         this.pixelRatio = options.pixelRatio ?? window.devicePixelRatio;
         this.nodeScale = options.nodeSize ?? 6;
         this.edgeOpacity = options.edgeOpacity ?? 0.12;
+        this.edgeWidth = options.edgeWidth ?? 0;
+        this.labelsVisible = options.labels?.enabled ?? true;
+        const labelColor = options.labels?.color;
+        this.labelColor = labelColor === undefined ? null
+            : typeof labelColor === 'string' ? labelColor
+            : rgbaCSS(parseColor(labelColor));
         this.antialias = options.antialias ?? true;
 
         const bg = options.background
@@ -596,10 +608,13 @@ export class Renderer implements PositionTarget {
 
         this.device.queue.writeBuffer(this.nodeUniformBuffer, 0, uniforms);
 
-        // Edge uniforms: same camera/viewport, but edgeOpacity + nodeScale in last 2 slots
-        uniforms[14] = this.edgeOpacity;
-        uniforms[15] = this.nodeScale;
-        this.device.queue.writeBuffer(this.edgeUniformBuffer, 0, uniforms);
+        // Edge uniforms: same camera/viewport, then edgeOpacity, nodeScale, edgeWidth
+        const edgeUniforms = this.edgeUniforms;
+        edgeUniforms.set(uniforms.subarray(0, 14), 0);
+        edgeUniforms[14] = this.edgeOpacity;
+        edgeUniforms[15] = this.nodeScale;
+        edgeUniforms[16] = this.edgeWidth * this.pixelRatio; // device pixels
+        this.device.queue.writeBuffer(this.edgeUniformBuffer, 0, edgeUniforms);
 
         // Begin render pass
         const encoder = this.device.createCommandEncoder();
@@ -784,6 +799,12 @@ export class Renderer implements PositionTarget {
     }
 
     /** Change edge opacity at runtime */
+    /** Fixed edge width in CSS pixels (0 = scale with node size) */
+    setEdgeWidth(width: number): void {
+        this.invalidate();
+        this.edgeWidth = Math.max(0, width);
+    }
+
     setEdgeOpacity(opacity: number): void {
         this.invalidate();
         this.edgeOpacity = opacity;
@@ -932,6 +953,9 @@ export class Renderer implements PositionTarget {
             if (sizes[id] > maxSize && graph.isNodeActive(id)) maxSize = sizes[id];
         }
         if (nodeRadius(maxSize) < 16) return;
+        const labelOpts = this.options.labels;
+        if (labelOpts?.visibleAtZoom !== undefined && this.camera.getZoom() < labelOpts.visibleAtZoom) return;
+        const family = labelOpts?.font ?? DEFAULT_FONT_FAMILY;
 
         lctx.save();
         lctx.scale(pr, pr);
@@ -990,7 +1014,7 @@ export class Renderer implements PositionTarget {
             // Edge font = 65% of what the node label would be WITHOUT the 22px cap
             const avgNodeR = (R[src] + R[tgt]) * 0.5;
             const edgeFontSize = Math.max(7, avgNodeR * 0.28 * 0.65);
-            const font = `500 ${edgeFontSize}px -apple-system,"Segoe UI",Helvetica,Arial,sans-serif`;
+            const font = `500 ${edgeFontSize}px ${family}`;
             if (lctx.font !== font) lctx.font = font;
 
             const labelOffset = edgeWidthPx * 0.5 + edgeFontSize * 0.55 + 3;
@@ -1062,18 +1086,29 @@ export class Renderer implements PositionTarget {
             if (sx < -60 || sx > cw + 60 || sy < -60 || sy > ch + 60) continue;
 
             const props = graph.getNodeProperties(id)!;
-            const label = (props.name ?? props.title ?? graph.getNodeTag(id)) as string;
-            if (!label) continue;
+            const value = labelOpts?.property !== undefined
+                ? props[labelOpts.property]
+                : props.name ?? props.title ?? graph.getNodeTag(id);
+            if (value === undefined || value === null || value === '') continue;
+            let label = String(value);
+            const maxLength = labelOpts?.maxLength;
+            if (maxLength !== undefined && maxLength > 0 && label.length > maxLength) {
+                label = label.slice(0, maxLength) + '…';
+            }
 
             const fontSize = Math.max(7, Math.min(nodeScreenR * 0.28, 22));
-            const font = `600 ${fontSize}px -apple-system,"Segoe UI",Helvetica,Arial,sans-serif`;
+            const font = `600 ${fontSize}px ${family}`;
             if (lctx.font !== font) lctx.font = font;
 
             const disp = this.fitLabel(lctx, font, label, nodeScreenR * 1.6);
             if (disp === null) continue;
 
-            const lum = colors[id * 4] * 0.2126 + colors[id * 4 + 1] * 0.7152 + colors[id * 4 + 2] * 0.0722;
-            lctx.fillStyle = lum > 0.189 ? 'rgba(0,0,0,0.88)' : 'rgba(255,255,255,0.93)';
+            if (this.labelColor) {
+                lctx.fillStyle = this.labelColor;
+            } else {
+                const lum = colors[id * 4] * 0.2126 + colors[id * 4 + 1] * 0.7152 + colors[id * 4 + 2] * 0.0722;
+                lctx.fillStyle = lum > 0.189 ? 'rgba(0,0,0,0.88)' : 'rgba(255,255,255,0.93)';
+            }
             lctx.fillText(disp, sx, sy);
         }
 
@@ -1210,4 +1245,10 @@ export class Renderer implements PositionTarget {
 function packColor(r: number, g: number, b: number): number {
     const to8 = (v: number) => Math.max(0, Math.min(255, Math.round(v * 255)));
     return (to8(r) | (to8(g) << 8) | (to8(b) << 16) | (255 << 24)) >>> 0;
+}
+
+/** CSS rgba() string from a 0-1 RGBA tuple */
+function rgbaCSS(c: [number, number, number, number]): string {
+    const b = (v: number) => Math.round(Math.max(0, Math.min(1, v)) * 255);
+    return `rgba(${b(c[0])},${b(c[1])},${b(c[2])},${c[3]})`;
 }

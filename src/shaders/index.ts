@@ -142,6 +142,10 @@ struct FrameUniforms {
   viewport: vec2f,
   edgeOpacity: f32,
   nodeScale: f32,
+  edgeWidth: f32,   // fixed width in device pixels, 0 = scale with nodes
+  _pad1: f32,
+  _pad2: f32,
+  _pad3: f32,
 };
 
 @group(0) @binding(0) var<uniform> frame: FrameUniforms;
@@ -223,12 +227,14 @@ fn vs_edge(
   let nodeWorldSize = frame.nodeScale * 0.01;
   let projectedNodeR = nodeWorldSize * cameraZoom;
   let minWidth = 2.5 / frame.viewport.y;
-  let w = max(minWidth, projectedNodeR * 1.0);
 
   // A perpendicular offset of 1 (in these units) spans viewport.y / 2
   // pixels. Grow the quad by 1px so the antialiasing ramp fits outside.
   let pxPerUnit = frame.viewport.y * 0.5;
-  let halfWidthPx = w * pxPerUnit;
+  var halfWidthPx = max(minWidth, projectedNodeR) * pxPerUnit;
+  if (frame.edgeWidth > 0.0) {
+    halfWidthPx = frame.edgeWidth * 0.5;
+  }
   let quadHalf = halfWidthPx + 1.0;
 
   let pos = mix(srcProj, tgtProj, t) + ndcPerp * s * (quadHalf / pxPerUnit);
