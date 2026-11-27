@@ -228,6 +228,14 @@ src/
 Anything you notice or want to suggest, just [open an issue](https://github.com/drkameleon/GraphGPU/issues).
 Want to contribute code? You are 100% welcome too! Just make a PR. 🚀
 
+To run the test suite:
+
+```bash
+npm install
+npm test            # single run
+npm run test:watch  # watch mode
+```
+
 <hr/>
 
 ### License
