@@ -458,6 +458,16 @@ describe('InteractionController: edge events', () => {
         expect(log).toEqual(['node:hover']);
     });
 
+    it('picks edges within a fixed edgeWidth', () => {
+        const edges: unknown[] = [];
+        controls.on('edge:click', (e) => edges.push(e.target));
+        click(550, 309); // ~9px off: only within a wide edge
+        expect(edges).toHaveLength(0);
+        controls.setEdgeWidth(16);
+        click(550, 309);
+        expect(edges).toHaveLength(1);
+    });
+
     it('does not pick edges when nobody listens', () => {
         const spy = vi.spyOn(controls, 'hitTestEdge');
         fire('pointermove', 550, 300);

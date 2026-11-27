@@ -169,6 +169,17 @@ check('thin edges keep their brightness when moving', Math.abs(newMid[1] - mid[1
 // Removing the edge hides it; adding many nodes/edges works
 // -----------------------------------------------------------
 
+// A fixed edge width: the line gets about that many pixels thick
+renderer.setEdgeWidth(9);
+renderer.renderFrame(40);
+{
+    const [x, y] = toPixel(0, 0.6);
+    let thick = 0;
+    for (let dy = -10; dy <= 10; dy++) if ((await readPixel(x, y + dy))[1] > 128) thick++;
+    check('edgeWidth sets the drawn width', thick >= 8 && thick <= 10, `${thick}px`);
+}
+renderer.setEdgeWidth(0);
+
 graph.removeEdge(e);
 renderer.renderFrame(48);
 const gone = await sample(0, 0.6);
