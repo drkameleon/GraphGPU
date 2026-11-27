@@ -418,14 +418,19 @@ export class GraphGPU {
     fitView(padding: number = 0.1): void {
         let minX = Infinity, minY = Infinity;
         let maxX = -Infinity, maxY = -Infinity;
+        const pos = this.graph.positions;
+        const sizes = this.graph.sizes;
+        // Nodes are drawn size × scale × 0.01 world units wide (radius)
+        const radiusScale = this.renderer.getNodeScale() * 0.01;
 
         for (const id of this.graph.activeNodeIds()) {
-            const x = this.graph.positions[id * 2];
-            const y = this.graph.positions[id * 2 + 1];
-            minX = Math.min(minX, x);
-            minY = Math.min(minY, y);
-            maxX = Math.max(maxX, x);
-            maxY = Math.max(maxY, y);
+            const x = pos[id * 2];
+            const y = pos[id * 2 + 1];
+            const r = sizes[id] * radiusScale;
+            minX = Math.min(minX, x - r);
+            minY = Math.min(minY, y - r);
+            maxX = Math.max(maxX, x + r);
+            maxY = Math.max(maxY, y + r);
         }
 
         if (minX === Infinity) return; // no nodes
