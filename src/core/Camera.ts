@@ -48,7 +48,9 @@ export class Camera {
 
     /** Pan by delta in screen pixels */
     pan(dx: number, dy: number): void {
-        this.x -= dx / (this.zoomLevel * this.canvasWidth * 0.5);
+        // One world unit spans zoom * height/2 pixels on BOTH axes
+        // (x is aspect-corrected in update()), so divide by height
+        this.x -= dx / (this.zoomLevel * this.canvasHeight * 0.5);
         this.y += dy / (this.zoomLevel * this.canvasHeight * 0.5);
         this.dirty = true;
     }
