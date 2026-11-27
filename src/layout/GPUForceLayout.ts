@@ -19,6 +19,7 @@ import {
     GRID_COUNT_SHADER, GRID_SCAN_SHADER, GRID_SCATTER_SHADER,
     GRID_MASS_SHADER, GRID_FORCES_SHADER,
 } from '../shaders/index';
+import { resolveLayoutOptions } from './options';
 import type { Graph } from '../core/Graph';
 
 export interface GPUForceConfig {
@@ -161,7 +162,7 @@ export class GPUForceLayout {
     ) {
         this.device = device;
         this.graph = graph;
-        this.config = { ...DEFAULTS, ...opts };
+        this.config = { ...DEFAULTS, ...resolveLayoutOptions<Partial<GPUForceConfig>>(opts) };
         this.target = target ?? null;
         this.ownsPositions = !this.target;
         this.init();
