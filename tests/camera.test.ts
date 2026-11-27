@@ -80,6 +80,30 @@ describe('Camera', () => {
         expect(cam.getZoom()).toBeLessThan(1);
     });
 
+    it('zooms by an arbitrary factor, keeping the cursor point fixed', () => {
+        const cam = new Camera(W, H);
+        const before = cam.screenToWorld(600, 150);
+        cam.zoomBy(3.5, 600, 150);
+        expect(cam.getZoom()).toBeCloseTo(3.5);
+        const after = cam.screenToWorld(600, 150);
+        expect(after[0]).toBeCloseTo(before[0]);
+        expect(after[1]).toBeCloseTo(before[1]);
+    });
+
+    it('ignores a non-finite cursor position', () => {
+        const cam = new Camera(W, H);
+        cam.zoomBy(2, NaN, 100);
+        expect(cam.getZoom()).toBe(2);
+        expect(cam.getState().x).toBe(0);
+        expect(cam.getState().y).toBe(0);
+    });
+
+    it('ignores invalid zoom factors', () => {
+        const cam = new Camera(W, H);
+        for (const f of [0, -2, NaN, Infinity]) cam.zoomBy(f);
+        expect(cam.getZoom()).toBe(1);
+    });
+
     it('clamps zoom to the configured range', () => {
         const cam = new Camera(W, H, [0.5, 2]);
         cam.setZoom(100);
