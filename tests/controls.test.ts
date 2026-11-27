@@ -312,3 +312,88 @@ describe('InteractionController: hit testing scale', () => {
         expect(log).toEqual(['canvas:click']);
     });
 });
+
+// -----------------------------------------------------------
+// Wheel zoom
+// -----------------------------------------------------------
+
+describe('InteractionController: wheel zoom', () => {
+    // happy-dom's WheelEvent drops the MouseEvent fields, so set them by hand
+    function wheel(
+        deltaY: number,
+        opts: { deltaMode?: number; ctrlKey?: boolean; x?: number; y?: number } = {},
+    ): void {
+        const e = new WheelEvent('wheel', {
+            deltaY,
+            deltaMode: opts.deltaMode ?? 0,
+            bubbles: true,
+            cancelable: true,
+        });
+        Object.defineProperties(e, {
+            clientX: { value: opts.x ?? 400 },
+            clientY: { value: opts.y ?? 300 },
+            ctrlKey: { value: opts.ctrlKey ?? false },
+        });
+        canvas.dispatchEvent(e);
+    }
+
+    it('zooms in on scroll up and out on scroll down', () => {
+        wheel(-100);
+        expect(camera.getZoom()).toBeGreaterThan(1);
+        camera.reset();
+        wheel(100);
+        expect(camera.getZoom()).toBeLessThan(1);
+    });
+
+    it('zooms proportionally to the scroll amount', () => {
+        // Many tiny trackpad events ≈ one big mouse-wheel event
+        for (let i = 0; i < 50; i++) wheel(-2);
+        const trackpad = camera.getZoom();
+        camera.reset();
+        wheel(-100);
+        expect(trackpad).toBeCloseTo(camera.getZoom(), 5);
+
+        // ...and a tiny event zooms only a tiny bit
+        camera.reset();
+        wheel(-2);
+        expect(camera.getZoom()).toBeLessThan(1.01);
+    });
+
+    it('normalizes line-based deltas', () => {
+        wheel(-3, { deltaMode: 1 });
+        const lines = camera.getZoom();
+        camera.reset();
+        wheel(-48);
+        expect(lines).toBeCloseTo(camera.getZoom(), 5);
+    });
+
+    it('zooms faster for trackpad pinch (ctrl + wheel)', () => {
+        wheel(-10, { ctrlKey: true });
+        const pinch = camera.getZoom();
+        camera.reset();
+        wheel(-10);
+        expect(pinch).toBeGreaterThan(camera.getZoom());
+    });
+
+    it('caps the zoom of a single huge event', () => {
+        wheel(-100000);
+        expect(camera.getZoom()).toBeLessThanOrEqual(2);
+    });
+
+    it('zooms toward the cursor', () => {
+        wheel(-200, { x: 700, y: 300 });
+        const [sx, sy] = camera.worldToScreen(1, 0);
+        expect(sx).toBeCloseTo(700);
+        expect(sy).toBeCloseTo(300);
+    });
+
+    it('pinches by the actual finger distance ratio', () => {
+        const touch = { pointerType: 'touch' };
+        fire('pointerdown', 300, 300, { ...touch, pointerId: 1 });
+        fire('pointerdown', 500, 300, { ...touch, pointerId: 2 });
+        fire('pointermove', 200, 300, { ...touch, pointerId: 1 });
+        fire('pointermove', 600, 300, { ...touch, pointerId: 2 });
+        // 200px → 300px → 400px apart: 2× in total
+        expect(camera.getZoom()).toBeCloseTo(2);
+    });
+});
