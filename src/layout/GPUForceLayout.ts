@@ -27,6 +27,8 @@ export interface GPUForceConfig {
     maxVelocity: number;
     stepsPerFrame: number;
     maxIterations: number;
+    /** Stop once the fastest node moves slower than this (per step) */
+    minVelocity: number;
 }
 
 const DEFAULTS: GPUForceConfig = {
@@ -39,7 +41,11 @@ const DEFAULTS: GPUForceConfig = {
     maxVelocity: 0.06,
     stepsPerFrame: 3,
     maxIterations: 1000,
+    minVelocity: 0.0005,
 };
+
+/** Consecutive calm readbacks before the GPU layout counts as settled */
+const STABLE_READBACKS = 3;
 
 const WORKGROUP_SIZE = 64;
 
@@ -101,6 +107,11 @@ export class GPUForceLayout {
     private generation = 0;
     /** A readback is in flight (the buffer can only be mapped once) */
     private mapping = false;
+
+    // Settling detection: positions at the previous readback
+    private lastSample: Float32Array | null = null;
+    private lastSampleIteration = 0;
+    private calmReadbacks = 0;
 
     // What's currently on the GPU
     private uploadedNodes = 0;
@@ -366,6 +377,7 @@ export class GPUForceLayout {
         const byteSize = n * 2 * 4;
         if (byteSize === 0) return;
 
+        const iteration = this.iteration;
         const encoder = this.device.createCommandEncoder();
         encoder.copyBufferToBuffer(this.positionsBuffer, 0, this.readbackBuffer, 0, byteSize);
         this.device.queue.submit([encoder.finish()]);
@@ -386,6 +398,10 @@ export class GPUForceLayout {
 
         if (generation !== this.generation) return;
 
+        if (this.running && this.hasSettled(data, iteration)) {
+            this.finish();
+        }
+
         // The graph may have changed size while we were waiting
         const count = Math.min(n, this.graph.nodeSlots) * 2;
         this.graph.positions.set(data.subarray(0, count));
@@ -402,10 +418,36 @@ export class GPUForceLayout {
         }
     }
 
+    /**
+     * Estimate the fastest node's speed from the displacement since the
+     * previous readback; true after a few calm readbacks in a row.
+     */
+    private hasSettled(sample: Float32Array, iteration: number): boolean {
+        const prev = this.lastSample;
+        const steps = iteration - this.lastSampleIteration;
+        this.lastSample = sample;
+        this.lastSampleIteration = iteration;
+        if (!prev || prev.length !== sample.length || steps <= 0) return false;
+
+        let maxDispSq = 0;
+        for (let i = 0; i < sample.length; i += 2) {
+            const dx = sample[i] - prev[i];
+            const dy = sample[i + 1] - prev[i + 1];
+            const d = dx * dx + dy * dy;
+            if (d > maxDispSq) maxDispSq = d;
+        }
+        // Displacement per step = velocity × timestep
+        const velocity = Math.sqrt(maxDispSq) / (steps * this.config.timestep);
+        this.calmReadbacks = velocity < this.config.minVelocity ? this.calmReadbacks + 1 : 0;
+        return this.calmReadbacks >= STABLE_READBACKS;
+    }
+
     async start(): Promise<void> {
         if (this.running || this.destroyed) return;
         this.running = true;
         this.iteration = 0;
+        this.lastSample = null;
+        this.calmReadbacks = 0;
         const generation = ++this.generation;
         this.beginSharing();
         this.uploadData();
