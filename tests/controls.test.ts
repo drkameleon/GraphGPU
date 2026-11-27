@@ -397,3 +397,71 @@ describe('InteractionController: wheel zoom', () => {
         expect(camera.getZoom()).toBeCloseTo(2);
     });
 });
+
+// -----------------------------------------------------------
+// Picking after changes & edge events
+// -----------------------------------------------------------
+
+describe('InteractionController: picking', () => {
+    it('picks nodes at their new position after they move', () => {
+        graph.setNodePosition(a, -1, -0.5); // screen (100, 450)
+        const log = record('node:select');
+        click(100, 450);
+        expect(log).toEqual(['node:select']);
+        expect([...controls.getSelectedNodes()]).toEqual([a]);
+    });
+
+    it('picks newly added nodes and ignores removed ones', () => {
+        const c = graph.addNode({ tag: 'n', x: -1, y: 0.5 }); // screen (100, 150)
+        click(100, 150);
+        expect([...controls.getSelectedNodes()]).toEqual([c]);
+
+        graph.removeNode(c);
+        const log = record('canvas:click');
+        click(100, 150);
+        expect(log).toEqual(['canvas:click']);
+    });
+});
+
+describe('InteractionController: edge events', () => {
+    // Edge from a (400,300) to b (700,300); its midpoint (550,300) is
+    // outside both node circles once nodes are small
+    beforeEach(() => {
+        controls.setNodeScale(1);
+        graph.addEdge({ tag: 'link', source: a, target: b });
+    });
+
+    it('emits edge:click instead of canvas:click when clicking an edge', () => {
+        const edges: unknown[] = [];
+        controls.on('edge:click', (e) => edges.push(e.target));
+        const log = record('canvas:click');
+        click(550, 301);
+        expect(edges).toHaveLength(1);
+        expect((edges[0] as { tag: string }).tag).toBe('link');
+        expect(log).toEqual([]);
+
+        click(550, 340); // well off the edge
+        expect(log).toEqual(['canvas:click']);
+    });
+
+    it('emits edge:hover and edge:hoverout', () => {
+        const log = record('edge:hover', 'edge:hoverout', 'node:hover');
+        fire('pointermove', 550, 300);
+        fire('pointermove', 560, 301);
+        fire('pointermove', 550, 360);
+        expect(log).toEqual(['edge:hover', 'edge:hoverout']);
+    });
+
+    it('prefers nodes over the edges under them', () => {
+        const log = record('edge:hover', 'node:hover');
+        fire('pointermove', 400, 300);
+        expect(log).toEqual(['node:hover']);
+    });
+
+    it('does not pick edges when nobody listens', () => {
+        const spy = vi.spyOn(controls, 'hitTestEdge');
+        fire('pointermove', 550, 300);
+        click(550, 300);
+        expect(spy).not.toHaveBeenCalled();
+    });
+});
