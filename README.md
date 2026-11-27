@@ -151,6 +151,13 @@ new GraphGPU({
 
 `node:click` · `node:select` · `node:deselect` · `node:hover` · `node:hoverout` · `node:drag` · `node:dragstart` · `node:dragend` · `node:dblclick` · `canvas:click` · `canvas:pan` · `canvas:zoom`
 
+`layout:start` · `layout:tick` (`{ iteration, energy }`) · `layout:stop` · `render:frame` (render stats: `fps`, `frameTime`, `nodeCount`, `edgeCount`, ...)
+
+```typescript
+g.on('layout:stop', () => g.fitView());
+g.on('render:frame', (e) => console.log(e.target.fps));
+```
+
 ### Physics Engine
 
 The layout simulation is modeled after [vis.js network](https://visjs.github.io/vis-network/docs/network/physics.html), with three force solvers running each tick:

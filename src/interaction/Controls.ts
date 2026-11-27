@@ -579,7 +579,8 @@ export class InteractionController {
     // Event emission
     // =========================================================
 
-    private emit(type: GraphGPUEventType, target: unknown, originalEvent?: Event): void {
+    /** Dispatch an event to its listeners (also used for layout/render events) */
+    emit(type: GraphGPUEventType, target: unknown, originalEvent?: Event): void {
         const handlers = this.listeners.get(type);
         if (!handlers) return;
         const event = { type, target, originalEvent };

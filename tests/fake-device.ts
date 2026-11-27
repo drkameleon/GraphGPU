@@ -21,7 +21,15 @@ export const gpu = {
     draws: [] as [number, number][],
     /** queue.writeBuffer calls: target buffer & byte count */
     writes: [] as { buffer: FakeBuffer; bytes: number }[],
+    /** Devices handed out by the fake navigator.gpu */
+    devices: [] as GPUDevice[],
 };
+
+/** Simulate losing the most recent device (driver reset, ...) */
+export function loseDevice(reason: string = 'unknown'): void {
+    const device = gpu.devices.at(-1) as unknown as { lose?: (r: string) => void };
+    device?.lose?.(reason);
+}
 
 export function releaseMaps(): void {
     const maps = gpu.pendingMaps;
@@ -79,6 +87,10 @@ interface FakeCommands {
 
 export function fakeDevice(): GPUDevice {
     let positions: FakeBuffer | null = null;
+    let lose: (reason: string) => void = () => {};
+    const lost = new Promise<GPUDeviceLostInfo>((resolve) => {
+        lose = (reason) => resolve({ reason, message: `fake device lost (${reason})` } as GPUDeviceLostInfo);
+    });
 
     const view = () => ({});
     const device = {
@@ -156,7 +168,9 @@ export function fakeDevice(): GPUDevice {
                 }
             },
         },
-        destroy() {},
+        lost,
+        lose,
+        destroy() { lose('destroyed'); },
     };
     return device as unknown as GPUDevice;
 }
@@ -172,10 +186,16 @@ export const WEBGPU_GLOBALS: Record<string, Record<string, number>> = {
     GPUTextureUsage: { RENDER_ATTACHMENT: 16 },
 };
 
-/** A `navigator.gpu` that hands out the given device */
-export function fakeNavigatorGPU(device: GPUDevice) {
+/** A `navigator.gpu` that hands out a new fake device per request */
+export function fakeNavigatorGPU() {
     return {
-        requestAdapter: async () => ({ requestDevice: async () => device }),
+        requestAdapter: async () => ({
+            requestDevice: async () => {
+                const device = fakeDevice();
+                gpu.devices.push(device);
+                return device;
+            },
+        }),
         getPreferredCanvasFormat: () => 'bgra8unorm',
     };
 }
@@ -196,4 +216,5 @@ export function resetGPU(): void {
     gpu.renderPasses = 0;
     gpu.draws = [];
     gpu.writes = [];
+    gpu.devices = [];
 }
