@@ -14,7 +14,11 @@
 //   cs_integrate  velocity + position update
 // ============================================================
 
-import { FORCE_COMPUTE_SHADER } from '../shaders/index';
+import {
+    FORCE_COMPUTE_SHADER,
+    GRID_COUNT_SHADER, GRID_SCAN_SHADER, GRID_SCATTER_SHADER,
+    GRID_MASS_SHADER, GRID_FORCES_SHADER,
+} from '../shaders/index';
 import type { Graph } from '../core/Graph';
 
 export interface GPUForceConfig {
@@ -27,6 +31,12 @@ export interface GPUForceConfig {
     maxVelocity: number;
     stepsPerFrame: number;
     maxIterations: number;
+    /**
+     * Approximate repulsion with a uniform grid (exact for nearby nodes,
+     * cell centers of mass for far ones): O(n·√n) instead of O(n²).
+     * 'auto' (default) enables it above 16k nodes.
+     */
+    approximateRepulsion: boolean | 'auto';
     /** Stop once the fastest node moves slower than this (per step) */
     minVelocity: number;
 }
@@ -41,6 +51,7 @@ const DEFAULTS: GPUForceConfig = {
     maxVelocity: 0.06,
     stepsPerFrame: 3,
     maxIterations: 1000,
+    approximateRepulsion: 'auto',
     minVelocity: 0.0005,
 };
 
@@ -48,6 +59,22 @@ const DEFAULTS: GPUForceConfig = {
 const STABLE_READBACKS = 3;
 
 const WORKGROUP_SIZE = 64;
+
+/** 'auto' switches to grid-approximated repulsion above this many nodes */
+const GRID_THRESHOLD = 16384;
+
+/** Re-fit the grid to the graph's bounds every this many frames */
+const GRID_REFIT_FRAMES = 15;
+
+const PARAMS_SIZE = 64;
+
+type BindingType = 'uniform' | 'storage' | 'read-only-storage';
+
+interface GridKernel {
+    pipeline: GPUComputePipeline;
+    layout: GPUBindGroupLayout;
+    bindGroup?: GPUBindGroup;
+}
 
 /**
  * Owner of a shared node-positions buffer (e.g. the renderer).
@@ -168,9 +195,9 @@ export class GPUForceLayout {
             compute: { module, entryPoint: 'cs_integrate' },
         });
 
-        // Params: 12 x f32 = 48 bytes (first 2 are u32)
+        // Params: 16 × 4 bytes (see ForceParams)
         this.paramsBuffer = this.device.createBuffer({
-            size: 48,
+            size: PARAMS_SIZE,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
 
@@ -254,6 +281,7 @@ export class GPUForceLayout {
     }
 
     private createBindGroup(): void {
+        if (this.grid) this.createGridBindGroups();
         this.bindGroup = this.device.createBindGroup({
             layout: this.bindGroupLayout,
             entries: [
@@ -324,14 +352,23 @@ export class GPUForceLayout {
     }
 
     /** Re-upload if nodes/edges were added or removed since the last upload */
+    /** Grid sizing follows node count; fit it on (re)upload */
+    private prepareGrid(): void {
+        if (this.usesGrid()) {
+            this.ensureGrid();
+            this.fitGrid();
+        }
+    }
+
     private syncWithGraph(): void {
         if (this.uploadedVersion === this.graph.structureVersion) return;
         this.uploadData(false);
+        this.prepareGrid();
         this.uploadParams();
     }
 
     private uploadParams(): void {
-        const buf = new ArrayBuffer(48);
+        const buf = new ArrayBuffer(PARAMS_SIZE);
         const u32 = new Uint32Array(buf);
         const f32 = new Float32Array(buf);
         u32[0] = this.uploadedNodes;
@@ -343,8 +380,149 @@ export class GPUForceLayout {
         f32[6] = this.config.damping;
         f32[7] = this.config.timestep;
         f32[8] = this.config.maxVelocity;
-        f32[9] = 0; f32[10] = 0; f32[11] = 0;
+        u32[9] = this.gridDim;
+        f32[10] = this.gridMinX;
+        f32[11] = this.gridMinY;
+        f32[12] = this.gridCellSize;
         this.device.queue.writeBuffer(this.paramsBuffer, 0, buf);
+    }
+
+    // =========================================================
+    // Grid-approximated repulsion
+    // =========================================================
+
+    private grid: {
+        count: GridKernel; scan: GridKernel; scatter: GridKernel;
+        mass: GridKernel; forces: GridKernel;
+    } | null = null;
+    private cellOf: GPUBuffer | null = null;
+    private sorted: GPUBuffer | null = null;
+    private cellCount: GPUBuffer | null = null;
+    private cellStart: GPUBuffer | null = null;
+    private cellCursor: GPUBuffer | null = null;
+    private cellMass: GPUBuffer | null = null;
+    private gridDim = 0;
+    private gridNodes = 0;       // node capacity of the grid buffers
+    private gridCells = 0;       // cell capacity of the grid buffers
+    private gridMinX = 0;
+    private gridMinY = 0;
+    private gridCellSize = 1;
+    private framesSinceFit = 0;
+
+    private usesGrid(): boolean {
+        const a = this.config.approximateRepulsion;
+        return a === true || (a === 'auto' && this.uploadedNodes > GRID_THRESHOLD);
+    }
+
+    private kernel(code: string, entryPoint: string, bindings: BindingType[]): GridKernel {
+        const layout = this.device.createBindGroupLayout({
+            entries: bindings.map((type, binding) => ({
+                binding, visibility: GPUShaderStage.COMPUTE, buffer: { type },
+            })),
+        });
+        const pipeline = this.device.createComputePipeline({
+            layout: this.device.createPipelineLayout({ bindGroupLayouts: [layout] }),
+            compute: { module: this.device.createShaderModule({ code }), entryPoint },
+        });
+        return { pipeline, layout };
+    }
+
+    /** Create pipelines (once) and buffers (when sizes change) for the grid */
+    private ensureGrid(): void {
+        if (!this.grid) {
+            const U: BindingType = 'uniform', S: BindingType = 'storage', R: BindingType = 'read-only-storage';
+            this.grid = {
+                count: this.kernel(GRID_COUNT_SHADER, 'cs_grid_count', [U, R, R, S, S]),
+                scan: this.kernel(GRID_SCAN_SHADER, 'cs_grid_scan', [U, S, S, S]),
+                scatter: this.kernel(GRID_SCATTER_SHADER, 'cs_grid_scatter', [U, R, S, S]),
+                mass: this.kernel(GRID_MASS_SHADER, 'cs_grid_mass', [U, R, R, R, S, S]),
+                forces: this.kernel(GRID_FORCES_SHADER, 'cs_grid_forces', [U, R, R, R, R, S, R, R, R]),
+            };
+        }
+
+        // ~√(5·√n) cells per side balances near (exact) and far (per-cell) work
+        const n = this.uploadedNodes;
+        const dim = Math.max(8, Math.min(128, Math.round(Math.sqrt(5 * Math.sqrt(n)))));
+        const cells = dim * dim;
+        let changed = false;
+
+        if (this.nodeCapacity > this.gridNodes) {
+            this.cellOf?.destroy();
+            this.sorted?.destroy();
+            this.cellOf = this.storage(this.nodeCapacity * 4);
+            this.sorted = this.storage(this.nodeCapacity * 4);
+            this.gridNodes = this.nodeCapacity;
+            changed = true;
+        }
+        if (cells > this.gridCells) {
+            this.cellCount?.destroy();
+            this.cellStart?.destroy();
+            this.cellCursor?.destroy();
+            this.cellMass?.destroy();
+            this.cellCount = this.storage(cells * 4);
+            this.cellStart = this.storage((cells + 1) * 4);
+            this.cellCursor = this.storage(cells * 4);
+            this.cellMass = this.storage(cells * 16);
+            this.gridCells = cells;
+            changed = true;
+        }
+        if (changed || dim !== this.gridDim) {
+            this.gridDim = dim;
+            this.fitGrid();
+        }
+        if (changed || !this.grid.count.bindGroup) this.createGridBindGroups();
+    }
+
+    private storage(size: number): GPUBuffer {
+        return this.device.createBuffer({
+            size: Math.max(16, size),
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        });
+    }
+
+    private createGridBindGroups(): void {
+        const grid = this.grid;
+        if (!grid || !this.cellOf) return;
+        const bind = (k: GridKernel, buffers: GPUBuffer[]) => {
+            k.bindGroup = this.device.createBindGroup({
+                layout: k.layout,
+                entries: buffers.map((buffer, binding) => ({ binding, resource: { buffer } })),
+            });
+        };
+        bind(grid.count, [this.paramsBuffer, this.positionsBuffer, this.sizesBuffer, this.cellOf, this.cellCount!]);
+        bind(grid.scan, [this.paramsBuffer, this.cellCount!, this.cellStart!, this.cellCursor!]);
+        bind(grid.scatter, [this.paramsBuffer, this.cellOf, this.cellCursor!, this.sorted!]);
+        bind(grid.mass, [this.paramsBuffer, this.positionsBuffer, this.cellStart!, this.sorted!, this.cellMass!, this.cellCount!]);
+        bind(grid.forces, [
+            this.paramsBuffer, this.positionsBuffer, this.sizesBuffer, this.neighborsBuffer,
+            this.offsetsBuffer, this.forcesBuffer, this.cellStart!, this.sorted!, this.cellMass!,
+        ]);
+    }
+
+    /**
+     * Fit the grid around the nodes (from the CPU copy of positions,
+     * which may lag a little: hence the margin; nodes outside it fall
+     * into the border cells).
+     */
+    private fitGrid(): void {
+        const pos = this.graph.positions;
+        const sizes = this.graph.sizes;
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (let i = 0; i < this.uploadedNodes; i++) {
+            if (sizes[i] <= 0) continue;
+            const x = pos[i * 2], y = pos[i * 2 + 1];
+            if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+        }
+        if (minX === Infinity) { minX = minY = -1; maxX = maxY = 1; }
+        const span = Math.max(maxX - minX, maxY - minY, 1e-3) * 1.5;
+        this.gridMinX = (minX + maxX) / 2 - span / 2;
+        this.gridMinY = (minY + maxY) / 2 - span / 2;
+        this.gridCellSize = span / Math.max(1, this.gridDim);
+        this.framesSinceFit = 0;
     }
 
     /** Run `steps` simulation steps in a single submit */
@@ -352,13 +530,38 @@ export class GPUForceLayout {
         const groups = Math.ceil(this.uploadedNodes / WORKGROUP_SIZE);
         if (groups === 0 || steps <= 0) return;
 
+        const grid = this.usesGrid();
+        if (grid) {
+            this.ensureGrid();
+            if (++this.framesSinceFit >= GRID_REFIT_FRAMES) {
+                this.fitGrid();
+                this.uploadParams();
+            }
+        }
+
         const encoder = this.device.createCommandEncoder();
         const pass = encoder.beginComputePass();
-        pass.setBindGroup(0, this.bindGroup);
         for (let i = 0; i < steps; i++) {
-            pass.setPipeline(this.forcesPipeline);
-            pass.dispatchWorkgroups(groups);
+            if (grid) {
+                const g = this.grid!;
+                const cellGroups = Math.ceil((this.gridDim * this.gridDim) / WORKGROUP_SIZE);
+                const run = (k: GridKernel, workgroups: number) => {
+                    pass.setPipeline(k.pipeline);
+                    pass.setBindGroup(0, k.bindGroup!);
+                    pass.dispatchWorkgroups(workgroups);
+                };
+                run(g.count, groups);
+                run(g.scan, 1);
+                run(g.scatter, groups);
+                run(g.mass, cellGroups);
+                run(g.forces, groups);
+            } else {
+                pass.setPipeline(this.forcesPipeline);
+                pass.setBindGroup(0, this.bindGroup);
+                pass.dispatchWorkgroups(groups);
+            }
             pass.setPipeline(this.integrationPipeline);
+            pass.setBindGroup(0, this.bindGroup);
             pass.dispatchWorkgroups(groups);
         }
         pass.end();
@@ -451,6 +654,7 @@ export class GPUForceLayout {
         const generation = ++this.generation;
         this.beginSharing();
         this.uploadData();
+        this.prepareGrid();
         this.uploadParams();
         this.onStart?.();
 
@@ -510,6 +714,7 @@ export class GPUForceLayout {
     async step(n: number): Promise<void> {
         if (this.destroyed) return;
         this.uploadData();
+        this.prepareGrid();
         this.uploadParams();
         this.dispatchSteps(n);
         await this.readbackPositions(this.generation);
@@ -536,6 +741,9 @@ export class GPUForceLayout {
         this.offsetsBuffer?.destroy();
         this.sizesBuffer?.destroy();
         this.paramsBuffer?.destroy();
+        for (const b of [this.cellOf, this.sorted, this.cellCount, this.cellStart, this.cellCursor, this.cellMass]) {
+            b?.destroy();
+        }
         this.readbackBuffer?.destroy();
     }
 }

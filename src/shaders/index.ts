@@ -261,8 +261,7 @@ fn fs_edge(in: VSOut) -> @location(0) vec4f {
  *                 node) and central gravity
  *   cs_integrate  velocity + position update
  */
-export const FORCE_COMPUTE_SHADER = /* wgsl */ `
-
+const FORCE_PARAMS = /* wgsl */ `
 struct ForceParams {
   nodeCount: u32,
   neighborCount: u32,
@@ -273,10 +272,53 @@ struct ForceParams {
   damping: f32,                // viscous friction (default: 0.18)
   timestep: f32,               // integration dt (default: 0.35)
   maxVelocity: f32,            // velocity clamp (default: 0.06)
+  gridDim: u32,                // grid repulsion: cells per side
+  gridMinX: f32,               // grid repulsion: origin
+  gridMinY: f32,
+  cellSize: f32,               // grid repulsion: cell size (world units)
   _pad1: f32,
   _pad2: f32,
   _pad3: f32,
 };
+`;
+
+/** Springs (from node i's own neighbor list) + central gravity */
+const SPRINGS_AND_GRAVITY = /* wgsl */ `
+fn springsAndGravity(i: u32, pos_i: vec2f) -> vec2f {
+  var force = vec2f(0.0, 0.0);
+  // vis.js: springForce = springConstant * (springLength - distance) / distance
+  let end = offsets[i + 1u];
+  for (var e = offsets[i]; e < end; e++) {
+    let j = neighbors[e];
+    if (sizes[j] <= 0.0) { continue; }
+    let delta = pos_i - positions[j];
+    let dist = max(length(delta), 0.0001);
+    force += delta * (params.springConstant * (params.springLength - dist) / dist);
+  }
+  // vis.js: gravityForce = centralGravity / distance
+  let toCenter = -pos_i;
+  let dc = max(length(toCenter), 0.0001);
+  force += toCenter * (params.centralGravity / dc);
+  return force;
+}
+`;
+
+/** Deterministic unit vector for a coincident pair, antisymmetric in (a, b) */
+const PAIR_DIRECTION = /* wgsl */ `
+fn pairDirection(a: u32, b: u32) -> vec2f {
+  let lo = min(a, b);
+  let hi = max(a, b);
+  var h = (lo * 0x9E3779B1u) ^ ((hi + 1u) * 0x85EBCA77u);
+  h = (h ^ (h >> 15u)) * 0x2C1B3C6Du;
+  h = h ^ (h >> 13u);
+  let angle = f32(h) / 4294967296.0 * 6.28318530718;
+  let sign = select(-1.0, 1.0, a == lo);
+  return vec2f(cos(angle), sin(angle)) * sign;
+}
+`;
+
+export const FORCE_COMPUTE_SHADER = /* wgsl */ `
+${FORCE_PARAMS}
 
 @group(0) @binding(0) var<uniform> params: ForceParams;
 @group(0) @binding(1) var<storage, read_write> positions: array<vec2f>;
@@ -291,17 +333,8 @@ const TILE: u32 = 64u;
 var<workgroup> tilePos: array<vec2f, 64>;
 var<workgroup> tileActive: array<u32, 64>;
 
-// Deterministic unit vector for a coincident pair, antisymmetric in (a, b)
-fn pairDirection(a: u32, b: u32) -> vec2f {
-  let lo = min(a, b);
-  let hi = max(a, b);
-  var h = (lo * 0x9E3779B1u) ^ ((hi + 1u) * 0x85EBCA77u);
-  h = (h ^ (h >> 15u)) * 0x2C1B3C6Du;
-  h = h ^ (h >> 13u);
-  let angle = f32(h) / 4294967296.0 * 6.28318530718;
-  let sign = select(-1.0, 1.0, a == lo);
-  return vec2f(cos(angle), sin(angle)) * sign;
-}
+${PAIR_DIRECTION}
+${SPRINGS_AND_GRAVITY}
 
 // ── Pass 1: all forces on node i ──
 @compute @workgroup_size(64)
@@ -359,23 +392,7 @@ fn cs_forces(
     return;
   }
 
-  // Springs (Hooke's law with rest length), from i's own neighbor list
-  // vis.js: springForce = springConstant * (springLength - distance) / distance
-  let end = offsets[i + 1u];
-  for (var e = offsets[i]; e < end; e++) {
-    let j = neighbors[e];
-    if (sizes[j] <= 0.0) { continue; }
-    let delta = pos_i - positions[j];
-    let dist = max(length(delta), 0.0001);
-    force += delta * (params.springConstant * (params.springLength - dist) / dist);
-  }
-
-  // Central gravity — vis.js: gravityForce = centralGravity / distance
-  let toCenter = -pos_i;
-  let dc = max(length(toCenter), 0.0001);
-  force += toCenter * (params.centralGravity / dc);
-
-  forces[i] = force;
+  forces[i] = force + springsAndGravity(i, pos_i);
 }
 
 // ── Pass 2: Velocity integration + position update ──
@@ -403,5 +420,198 @@ fn cs_integrate(@builtin(global_invocation_id) gid: vec3u) {
   // Update position
   positions[i] += vel * dt;
   velocities[i] = vel;
+}
+`;
+
+// ============================================================
+// Grid-approximated repulsion (large graphs)
+// ============================================================
+// Per step: bin nodes into a gridDim² grid (counting sort: count,
+// scan, scatter), sum each cell's mass & center of mass, then per
+// node: exact repulsion from nodes in the surrounding 5×5 cells,
+// and each farther cell's center of mass for the rest.
+// Each kernel binds only what it needs (≤ 8 storage buffers).
+// ============================================================
+
+const GRID_NEAR = 2; // cells: exact repulsion within ±2 cells
+
+const CELL_OF = /* wgsl */ `
+fn cellCoords(p: vec2f) -> vec2i {
+  let g = i32(params.gridDim);
+  let c = vec2i(floor((p - vec2f(params.gridMinX, params.gridMinY)) / params.cellSize));
+  return clamp(c, vec2i(0, 0), vec2i(g - 1, g - 1));
+}
+`;
+
+/** 1. Count nodes per cell */
+export const GRID_COUNT_SHADER = /* wgsl */ `
+${FORCE_PARAMS}
+${CELL_OF}
+@group(0) @binding(0) var<uniform> params: ForceParams;
+@group(0) @binding(1) var<storage, read> positions: array<vec2f>;
+@group(0) @binding(2) var<storage, read> sizes: array<f32>;
+@group(0) @binding(3) var<storage, read_write> cellOf: array<u32>;
+@group(0) @binding(4) var<storage, read_write> cellCount: array<atomic<u32>>;
+
+@compute @workgroup_size(64)
+fn cs_grid_count(@builtin(global_invocation_id) gid: vec3u) {
+  let i = gid.x;
+  if (i >= params.nodeCount) { return; }
+  if (sizes[i] <= 0.0) {
+    cellOf[i] = 0xFFFFFFFFu;
+    return;
+  }
+  let c = cellCoords(positions[i]);
+  let cell = u32(c.y) * params.gridDim + u32(c.x);
+  cellOf[i] = cell;
+  atomicAdd(&cellCount[cell], 1u);
+}
+`;
+
+/** 2. Exclusive prefix sum of the counts (one workgroup) */
+export const GRID_SCAN_SHADER = /* wgsl */ `
+${FORCE_PARAMS}
+@group(0) @binding(0) var<uniform> params: ForceParams;
+@group(0) @binding(1) var<storage, read_write> cellCount: array<atomic<u32>>;
+@group(0) @binding(2) var<storage, read_write> cellStart: array<u32>;
+@group(0) @binding(3) var<storage, read_write> cellCursor: array<atomic<u32>>;
+
+var<workgroup> partial: array<u32, 256>;
+
+@compute @workgroup_size(256)
+fn cs_grid_scan(@builtin(local_invocation_id) lid: vec3u) {
+  let cells = params.gridDim * params.gridDim;
+  let per = (cells + 255u) / 256u;
+  let first = min(lid.x * per, cells);
+  let last = min(first + per, cells);
+
+  var sum = 0u;
+  for (var k = first; k < last; k++) { sum += atomicLoad(&cellCount[k]); }
+  partial[lid.x] = sum;
+  workgroupBarrier();
+
+  // Inclusive scan of the 256 partial sums (Hillis-Steele)
+  for (var offset = 1u; offset < 256u; offset = offset * 2u) {
+    var v = partial[lid.x];
+    if (lid.x >= offset) { v += partial[lid.x - offset]; }
+    workgroupBarrier();
+    partial[lid.x] = v;
+    workgroupBarrier();
+  }
+
+  var running = partial[lid.x] - sum;
+  for (var k = first; k < last; k++) {
+    cellStart[k] = running;
+    atomicStore(&cellCursor[k], running);
+    running += atomicLoad(&cellCount[k]);
+  }
+  if (lid.x == 255u) { cellStart[cells] = partial[255]; }
+}
+`;
+
+/** 3. Place each node in its cell's slot range */
+export const GRID_SCATTER_SHADER = /* wgsl */ `
+${FORCE_PARAMS}
+@group(0) @binding(0) var<uniform> params: ForceParams;
+@group(0) @binding(1) var<storage, read> cellOf: array<u32>;
+@group(0) @binding(2) var<storage, read_write> cellCursor: array<atomic<u32>>;
+@group(0) @binding(3) var<storage, read_write> sorted: array<u32>;
+
+@compute @workgroup_size(64)
+fn cs_grid_scatter(@builtin(global_invocation_id) gid: vec3u) {
+  let i = gid.x;
+  if (i >= params.nodeCount) { return; }
+  let cell = cellOf[i];
+  if (cell == 0xFFFFFFFFu) { return; }
+  sorted[atomicAdd(&cellCursor[cell], 1u)] = i;
+}
+`;
+
+/** 4. Mass & center of mass per cell (and reset counts for the next step) */
+export const GRID_MASS_SHADER = /* wgsl */ `
+${FORCE_PARAMS}
+@group(0) @binding(0) var<uniform> params: ForceParams;
+@group(0) @binding(1) var<storage, read> positions: array<vec2f>;
+@group(0) @binding(2) var<storage, read> cellStart: array<u32>;
+@group(0) @binding(3) var<storage, read> sorted: array<u32>;
+@group(0) @binding(4) var<storage, read_write> cellMass: array<vec4f>;
+@group(0) @binding(5) var<storage, read_write> cellCount: array<atomic<u32>>;
+
+@compute @workgroup_size(64)
+fn cs_grid_mass(@builtin(global_invocation_id) gid: vec3u) {
+  let c = gid.x;
+  if (c >= params.gridDim * params.gridDim) { return; }
+  let first = cellStart[c];
+  let last = cellStart[c + 1u];
+  var sum = vec2f(0.0, 0.0);
+  for (var k = first; k < last; k++) { sum += positions[sorted[k]]; }
+  let m = f32(last - first);
+  cellMass[c] = vec4f(select(vec2f(0.0, 0.0), sum / m, m > 0.0), m, 0.0);
+  atomicStore(&cellCount[c], 0u);
+}
+`;
+
+/** 5. Forces: near cells exact, far cells by center of mass, + springs & gravity */
+export const GRID_FORCES_SHADER = /* wgsl */ `
+${FORCE_PARAMS}
+${CELL_OF}
+${PAIR_DIRECTION}
+@group(0) @binding(0) var<uniform> params: ForceParams;
+@group(0) @binding(1) var<storage, read> positions: array<vec2f>;
+@group(0) @binding(2) var<storage, read> sizes: array<f32>;
+@group(0) @binding(3) var<storage, read> neighbors: array<u32>;
+@group(0) @binding(4) var<storage, read> offsets: array<u32>;
+@group(0) @binding(5) var<storage, read_write> forces: array<vec2f>;
+@group(0) @binding(6) var<storage, read> cellStart: array<u32>;
+@group(0) @binding(7) var<storage, read> sorted: array<u32>;
+@group(0) @binding(8) var<storage, read> cellMass: array<vec4f>;
+${SPRINGS_AND_GRAVITY}
+
+const NEAR: i32 = ${GRID_NEAR};
+
+@compute @workgroup_size(64)
+fn cs_grid_forces(@builtin(global_invocation_id) gid: vec3u) {
+  let i = gid.x;
+  if (i >= params.nodeCount) { return; }
+  if (sizes[i] <= 0.0) {
+    forces[i] = vec2f(0.0, 0.0);
+    return;
+  }
+
+  let pos_i = positions[i];
+  let own = cellCoords(pos_i);
+  let g = i32(params.gridDim);
+  let G = params.gravitationalConstant;
+  var force = vec2f(0.0, 0.0);
+
+  for (var cy = 0; cy < g; cy++) {
+    for (var cx = 0; cx < g; cx++) {
+      let c = u32(cy * g + cx);
+      if (abs(cx - own.x) <= NEAR && abs(cy - own.y) <= NEAR) {
+        // Near: exact, node by node
+        let end = cellStart[c + 1u];
+        for (var k = cellStart[c]; k < end; k++) {
+          let j = sorted[k];
+          if (j == i) { continue; }
+          var delta = pos_i - positions[j];
+          var dist = length(delta);
+          if (dist < 0.0001) {
+            dist = 0.01;
+            delta = pairDirection(i, j) * dist;
+          }
+          force -= (delta / dist) * (G / (dist * dist));
+        }
+      } else {
+        // Far: the whole cell as one mass at its center of mass
+        let cm = cellMass[c];
+        if (cm.z == 0.0) { continue; }
+        let delta = pos_i - cm.xy;
+        let dist = max(length(delta), 0.0001);
+        force -= (delta / dist) * (G * cm.z / (dist * dist));
+      }
+    }
+  }
+
+  forces[i] = force + springsAndGravity(i, pos_i);
 }
 `;

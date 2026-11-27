@@ -21,6 +21,8 @@ export const gpu = {
     draws: [] as [number, number][],
     /** queue.writeBuffer calls: target buffer & byte count */
     writes: [] as { buffer: FakeBuffer; bytes: number }[],
+    /** Entry points of the compute pipelines created */
+    entryPoints: [] as string[],
     /** How far the fake compute moves every node per integration step */
     stepDelta: 1,
     /** Devices handed out by the fake navigator.gpu */
@@ -99,7 +101,10 @@ export function fakeDevice(): GPUDevice {
         createShaderModule: () => ({}),
         createBindGroupLayout: () => ({}),
         createPipelineLayout: () => ({}),
-        createComputePipeline: (desc: GPUComputePipelineDescriptor) => ({ entryPoint: desc.compute.entryPoint }),
+        createComputePipeline: (desc: GPUComputePipelineDescriptor) => {
+            gpu.entryPoints.push(desc.compute.entryPoint ?? '');
+            return { entryPoint: desc.compute.entryPoint };
+        },
         createRenderPipeline: () => ({}),
         createTexture: () => ({ createView: view, destroy() {} }),
         createBindGroup: (desc: GPUBindGroupDescriptor) => {
@@ -219,5 +224,6 @@ export function resetGPU(): void {
     gpu.draws = [];
     gpu.writes = [];
     gpu.devices = [];
+    gpu.entryPoints = [];
     gpu.stepDelta = 1;
 }
