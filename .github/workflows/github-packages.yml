@@ -1,0 +1,50 @@
+name: GitHub Packages
+
+# Publishes the package to GitHub Packages as @drkameleon/graphgpu.
+# Called by the Release workflow; can also be run by hand for a tag.
+
+on:
+    workflow_call:
+        inputs:
+            tag:
+                type: string
+                required: true
+    workflow_dispatch:
+        inputs:
+            tag:
+                description: "Tag to publish (e.g. v0.4.0)"
+                type: string
+                required: true
+
+permissions:
+    contents: read
+    packages: write
+
+jobs:
+    publish:
+        name: Publish to GitHub Packages
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+              with:
+                  ref: ${{ inputs.tag }}
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 22
+                  cache: npm
+                  registry-url: https://npm.pkg.github.com
+                  scope: "@drkameleon"
+
+            - name: Install dependencies
+              run: npm ci
+
+            - name: Publish
+              run: |
+                  npm pkg set name=@drkameleon/graphgpu
+                  npm publish
+              env:
+                  NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

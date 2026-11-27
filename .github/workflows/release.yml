@@ -72,3 +72,13 @@ jobs:
                   files: |
                       dist/graphgpu.standalone.js
                       dist/graphgpu.standalone.min.js
+
+    github-packages:
+        name: GitHub Packages
+        needs: release
+        permissions:
+            contents: read
+            packages: write
+        uses: ./.github/workflows/github-packages.yml
+        with:
+            tag: ${{ github.ref_name }}
