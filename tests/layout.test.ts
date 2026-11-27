@@ -67,6 +67,19 @@ describe('ForceLayout: physics', () => {
         expect(nodeDistance(g, a, b)).toBeLessThan(before);
     });
 
+    it('does not stop mid-oscillation', () => {
+        // Default minVelocity: a single calm tick at a turning point used to stop it early
+        const g = new Graph();
+        const a = g.addNode({ tag: 'n', x: -0.9, y: 0 });
+        const b = g.addNode({ tag: 'n', x: 0.9, y: 0 });
+        g.addEdge({ tag: 'e', source: a, target: b });
+
+        new ForceLayout(g, {
+            type: 'force', gravitationalConstant: 0, centralGravity: 0, springLength: 0.4, maxIterations: 10000,
+        }).step(10000);
+        expect(nodeDistance(g, a, b)).toBeCloseTo(0.4, 1);
+    });
+
     it('relaxes springs toward their rest length', () => {
         const g = new Graph();
         const a = g.addNode({ tag: 'n', x: -0.9, y: 0 });
@@ -255,6 +268,15 @@ describe('ForceLayout: run loop', () => {
         layout.stop();
         layout.stop();
         expect(onStop).toHaveBeenCalledTimes(1);
+    });
+
+    it('auto-stops once settled', () => {
+        const g = new Graph();
+        g.addNode({ tag: 'n', x: 0, y: 0 });
+        const layout = new ForceLayout(g, { type: 'force', maxIterations: 100000 });
+        layout.start();
+        flushFrames(10);
+        expect(layout.isRunning()).toBe(false);
     });
 
     it('auto-stops at maxIterations', () => {

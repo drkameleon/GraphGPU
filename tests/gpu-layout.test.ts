@@ -202,3 +202,24 @@ describe('GPUForceLayout: grid repulsion', () => {
         layout.destroy();
     });
 });
+
+describe('GPUForceLayout: settling', () => {
+    it('stops by itself once nodes stop moving', async () => {
+        gpu.stepDelta = 0; // the fake compute leaves positions alone
+        const g = randomGraph(20, 20);
+        const layout = new GPUForceLayout(fakeDevice(), g, { stepsPerFrame: 1, maxIterations: 100000 });
+        await layout.start();
+        await flushFrames(10);
+        expect(layout.isRunning()).toBe(false);
+        layout.destroy();
+    });
+
+    it('keeps running while nodes move', async () => {
+        const g = randomGraph(20, 20);
+        const layout = new GPUForceLayout(fakeDevice(), g, { stepsPerFrame: 1, maxIterations: 100000 });
+        await layout.start();
+        await flushFrames(10);
+        expect(layout.isRunning()).toBe(true);
+        layout.destroy();
+    });
+});

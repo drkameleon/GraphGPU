@@ -23,6 +23,8 @@ export const gpu = {
     writes: [] as { buffer: FakeBuffer; bytes: number }[],
     /** Entry points of the compute pipelines created */
     entryPoints: [] as string[],
+    /** How far the fake compute moves every node per integration step */
+    stepDelta: 1,
     /** Devices handed out by the fake navigator.gpu */
     devices: [] as GPUDevice[],
 };
@@ -166,7 +168,7 @@ export function fakeDevice(): GPUDevice {
                 for (const cmd of cmds) {
                     if (cmd.dispatched > 0 && positions) {
                         const f = new Float32Array(positions.data);
-                        for (let i = 0; i < f.length; i++) f[i] += cmd.dispatched;
+                        for (let i = 0; i < f.length; i++) f[i] += cmd.dispatched * gpu.stepDelta;
                     }
                     if (cmd.rendered) gpu.renderPasses++;
                     for (const copy of cmd.copies) copy();
@@ -223,4 +225,5 @@ export function resetGPU(): void {
     gpu.writes = [];
     gpu.devices = [];
     gpu.entryPoints = [];
+    gpu.stepDelta = 1;
 }
