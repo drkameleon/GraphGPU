@@ -238,7 +238,7 @@ layout.destroy();
     const P = { G: -0.25, L: 0.2, K: 0.06, C: 0.012, dt: 0.1 };
     const pg = new Graph({ maxNodes: N, maxEdges: 1000 });
     let seed = 7;
-    const rand = () => ((seed = (seed * 1103515245 + 12345) >>> 0) / 4294967296);
+    const rand = () => ((seed = (Math.imul(seed, 1103515245) + 12345) >>> 0) / 4294967296);
     for (let i = 0; i < N; i++) pg.addNode({ tag: 'n', x: rand() * 2 - 1, y: rand() * 2 - 1 });
     pg.setNodePosition(N - 1, pg.positions[(N - 2) * 2], pg.positions[(N - 2) * 2 + 1]); // coincident pair
     for (let i = 1; i <= 150; i++) pg.addEdge({ tag: 'hub', source: 0, target: i }); // hub
@@ -319,6 +319,79 @@ layout.destroy();
     );
     check('coincident nodes are pushed apart', pair > 0 && Number.isFinite(pair), `distance ${pair.toExponential(2)}`);
     physics.destroy();
+}
+
+// -----------------------------------------------------------
+// Grid-approximated repulsion (large graphs) vs exact reference
+// -----------------------------------------------------------
+
+{
+    const N = 20000;
+    const P = { G: -0.25, L: 0.2, K: 0.06, C: 0.012, dt: 0.1 };
+    const pg = new Graph({ maxNodes: N, maxEdges: N });
+    let seed = 99;
+    const rand = () => ((seed = (Math.imul(seed, 1103515245) + 12345) >>> 0) / 4294967296);
+    for (let i = 0; i < N; i++) pg.addNode({ tag: 'n', x: rand() * 2 - 1, y: rand() * 2 - 1 });
+    for (let i = 0; i < N; i++) {
+        pg.addEdge({ tag: 'r', source: Math.floor(rand() * N), target: Math.floor(rand() * N) });
+    }
+    const x0 = Float64Array.from(pg.positions.subarray(0, N * 2));
+
+    // Exact reference: O(n²) repulsion + springs + gravity
+    const ref = new Float64Array(N * 2);
+    for (let i = 0; i < N; i++) {
+        const xi = x0[i * 2], yi = x0[i * 2 + 1];
+        let fx = 0, fy = 0;
+        for (let j = 0; j < N; j++) {
+            if (j === i) continue;
+            const dx = xi - x0[j * 2], dy = yi - x0[j * 2 + 1];
+            const d2 = dx * dx + dy * dy;
+            if (d2 < 1e-8) continue;
+            const d = Math.sqrt(d2);
+            const mag = P.G / d2;
+            fx -= (dx / d) * mag;
+            fy -= (dy / d) * mag;
+        }
+        const dc = Math.max(Math.hypot(xi, yi), 0.0001);
+        ref[i * 2] = fx - xi * (P.C / dc);
+        ref[i * 2 + 1] = fy - yi * (P.C / dc);
+    }
+    for (const id of pg.activeEdgeIds()) {
+        const a = pg.edgeIndices[id * 2], b = pg.edgeIndices[id * 2 + 1];
+        if (a === b) continue;
+        const dx = x0[a * 2] - x0[b * 2], dy = x0[a * 2 + 1] - x0[b * 2 + 1];
+        const d = Math.max(Math.hypot(dx, dy), 0.0001);
+        const sf = P.K * (P.L - d) / d;
+        ref[a * 2] += dx * sf; ref[a * 2 + 1] += dy * sf;
+        ref[b * 2] -= dx * sf; ref[b * 2 + 1] -= dy * sf;
+    }
+
+    device.pushErrorScope('validation');
+    const approx = new GPUForceLayout(device, pg, {
+        gravitationalConstant: P.G, springLength: P.L, springConstant: P.K,
+        centralGravity: P.C, damping: 0, timestep: P.dt, maxVelocity: 1e9,
+        approximateRepulsion: true,
+    });
+    await approx.step(1);
+    const gridErr = await device.popErrorScope();
+    check('grid repulsion has no validation errors', gridErr === null, gridErr?.message);
+
+    // Error relative to the typical force (plain relative error blows up
+    // where forces nearly cancel)
+    let meanForce = 0;
+    for (let i = 0; i < N; i++) meanForce += Math.hypot(ref[i * 2], ref[i * 2 + 1]);
+    meanForce /= N;
+    const errors: number[] = [];
+    for (let i = 0; i < N; i++) {
+        const gx = (pg.positions[i * 2] - x0[i * 2]) / (P.dt * P.dt);
+        const gy = (pg.positions[i * 2 + 1] - x0[i * 2 + 1]) / (P.dt * P.dt);
+        errors.push(Math.hypot(gx - ref[i * 2], gy - ref[i * 2 + 1]) / meanForce);
+    }
+    errors.sort((a, b) => a - b);
+    const median = errors[Math.floor(N * 0.5)], p99 = errors[Math.floor(N * 0.99)];
+    console.log(`  grid error vs exact: median ${(median * 100).toFixed(2)}%, p99 ${(p99 * 100).toFixed(2)}%, max ${(errors[N - 1] * 100).toFixed(2)}% (of the mean force)`);
+    check('grid repulsion stays close to exact', median < 0.005 && p99 < 0.01, `median ${(median * 100).toFixed(2)}%, p99 ${(p99 * 100).toFixed(2)}%`);
+    approx.destroy();
 }
 
 // Destroys the device too, so it goes last

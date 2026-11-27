@@ -168,3 +168,37 @@ describe('buildAdjacency', () => {
         for (let i = 0; i < 500; i++) expect(offsets[i + 1]).toBeGreaterThanOrEqual(offsets[i]);
     });
 });
+
+describe('GPUForceLayout: grid repulsion', () => {
+    it("'auto' uses the grid only for large graphs", async () => {
+        const small = new GPUForceLayout(fakeDevice(), randomGraph(1000, 1000), { stepsPerFrame: 1 });
+        await small.step(1);
+        expect(gpu.entryPoints).not.toContain('cs_grid_forces');
+        small.destroy();
+
+        const large = new GPUForceLayout(fakeDevice(), randomGraph(20000, 20000), { stepsPerFrame: 1 });
+        await large.step(1);
+        expect(gpu.entryPoints).toContain('cs_grid_forces');
+        large.destroy();
+    });
+
+    it('steps and grows without out-of-range writes', async () => {
+        const g = randomGraph(500, 500);
+        const x0 = g.positions[0];
+        const layout = new GPUForceLayout(fakeDevice(), g, { stepsPerFrame: 1, approximateRepulsion: true, maxIterations: 1000 });
+        await layout.start();
+        await flushFrames(2);
+        for (let i = 0; i < 3000; i++) g.addNode({ tag: 'late', x: 0, y: 0 });
+        await flushFrames(3);
+        expect(gpu.errors).toEqual([]);
+        expect(g.positions[0]).toBeGreaterThan(x0);
+        layout.destroy();
+    });
+
+    it('can be turned off explicitly', async () => {
+        const layout = new GPUForceLayout(fakeDevice(), randomGraph(20000, 100), { approximateRepulsion: false });
+        await layout.step(1);
+        expect(gpu.entryPoints).not.toContain('cs_grid_forces');
+        layout.destroy();
+    });
+});
