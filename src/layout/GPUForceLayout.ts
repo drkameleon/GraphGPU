@@ -136,8 +136,8 @@ export class GPUForceLayout {
     }
 
     private allocateBuffers(): void {
-        const nNodes = Math.max(this.graph.numNodes, 64);
-        const nEdges = Math.max(this.graph.numEdges, 64);
+        const nNodes = Math.max(this.graph.nodeSlots, 64);
+        const nEdges = Math.max(this.graph.edgeSlots, 64);
 
         this.positionsBuffer?.destroy();
         this.velocitiesBuffer?.destroy();
@@ -191,8 +191,8 @@ export class GPUForceLayout {
     }
 
     private uploadData(): void {
-        const n = this.graph.numNodes;
-        const e = this.graph.numEdges;
+        const n = this.graph.nodeSlots;
+        const e = this.graph.edgeSlots;
         if (n > this.nodeCapacity || e > this.edgeCapacity) {
             this.allocateBuffers();
         }
@@ -208,8 +208,8 @@ export class GPUForceLayout {
         const buf = new ArrayBuffer(48);
         const u32 = new Uint32Array(buf);
         const f32 = new Float32Array(buf);
-        u32[0] = this.graph.numNodes;
-        u32[1] = this.graph.numEdges;
+        u32[0] = this.graph.nodeSlots;
+        u32[1] = this.graph.edgeSlots;
         f32[2] = this.config.gravitationalConstant;
         f32[3] = this.config.springLength;
         f32[4] = this.config.springConstant;
@@ -222,8 +222,8 @@ export class GPUForceLayout {
     }
 
     private dispatchStep(): void {
-        const n = this.graph.numNodes;
-        const e = this.graph.numEdges;
+        const n = this.graph.nodeSlots;
+        const e = this.graph.edgeSlots;
         const nodeGroups = Math.ceil(n / WORKGROUP_SIZE);
         const edgeGroups = Math.ceil(e / WORKGROUP_SIZE);
 
@@ -263,7 +263,7 @@ export class GPUForceLayout {
     }
 
     private async readbackPositions(): Promise<void> {
-        const n = this.graph.numNodes;
+        const n = this.graph.nodeSlots;
         const byteSize = n * 2 * 4;
         const encoder = this.device.createCommandEncoder();
         encoder.copyBufferToBuffer(this.positionsBuffer, 0, this.readbackBuffer, 0, byteSize);
