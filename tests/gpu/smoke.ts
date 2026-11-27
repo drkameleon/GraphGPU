@@ -31,11 +31,14 @@ function check(name: string, ok: boolean, detail = ''): void {
 // A headless "canvas" backed by a real texture
 // -----------------------------------------------------------
 
-const adapter = await navigator.gpu.requestAdapter();
+const adapter = await navigator.gpu?.requestAdapter();
 if (!adapter) {
-    console.log('No WebGPU adapter available, skipping');
-    Deno.exit(0);
+    // In CI the adapter is required (GPU_REQUIRED=1): fail instead of skipping
+    console.log('No WebGPU adapter available' + (Deno.env.get('GPU_REQUIRED') ? '' : ', skipping'));
+    Deno.exit(Deno.env.get('GPU_REQUIRED') ? 1 : 0);
 }
+const info = adapter.info ?? {};
+console.log(`Adapter: ${[info.vendor, info.architecture, info.device, info.description].filter(Boolean).join(' / ') || 'unknown'}\n`);
 
 let device!: GPUDevice;
 let target!: GPUTexture;
