@@ -115,6 +115,11 @@ fn fs_node(in: VSOut) -> @location(0) vec4f {
 /**
  * Edge shader - instanced quads between node pairs.
  *
+ * Each instance only carries its endpoint ids and color; node
+ * positions are read from the same storage buffer the nodes are
+ * drawn from, so moving nodes never requires re-uploading edges.
+ * Instances with color alpha 0 are removed slots and get culled.
+ *
  * FIX: The perpendicular vector is now computed in screen-space
  * (aspect-corrected) so that edge width is uniform regardless of
  * the edge's angle.  Previously, the perpendicular was computed
@@ -138,6 +143,7 @@ struct FrameUniforms {
 };
 
 @group(0) @binding(0) var<uniform> frame: FrameUniforms;
+@group(0) @binding(1) var<storage, read> positions: array<vec2f>;
 
 struct VSOut {
   @builtin(position) position: vec4f,
@@ -163,18 +169,26 @@ var<private> ES: array<f32, 6> = array<f32, 6>(-1.0, -1.0, 1.0, 1.0, -1.0, 1.0);
 @vertex
 fn vs_edge(
   @builtin(vertex_index) vi: u32,
-  @location(0) srcPos: vec2f,
-  @location(1) tgtPos: vec2f,
-  @location(2) alpha: f32,
-  @location(3) edgeColor: vec3f,
+  @location(0) ends: vec2u,
+  @location(1) packedColor: vec4f,
 ) -> VSOut {
   let t = ET[vi];
   let s = ES[vi];
-
-  let srcProj = applyCamera(srcPos);
-  let tgtProj = applyCamera(tgtPos);
+  let edgeColor = packedColor.rgb;
 
   var out: VSOut;
+
+  // Removed edge slot: emit a degenerate vertex outside the clip volume
+  if (packedColor.a == 0.0) {
+    out.position = vec4f(2.0, 2.0, 2.0, 1.0);
+    out.alpha = 0.0;
+    out.vEdge = 0.0;
+    out.color = edgeColor;
+    return out;
+  }
+
+  let srcProj = applyCamera(positions[ends.x]);
+  let tgtProj = applyCamera(positions[ends.y]);
 
   // ── Compute perpendicular in screen-space to fix aspect distortion ──
   let aspect = frame.viewport.x / frame.viewport.y;
@@ -209,7 +223,7 @@ fn vs_edge(
   let pos = mix(srcProj, tgtProj, t) + ndcPerp * s * w;
 
   out.position = vec4f(pos, 0.0, 1.0);
-  out.alpha = alpha * frame.edgeOpacity;
+  out.alpha = frame.edgeOpacity;
   out.vEdge = s;  // raw -1 to +1, interpolated across quad face
   out.color = edgeColor;
   return out;

@@ -24,6 +24,7 @@
     "dev": "tsc --watch",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:gpu": "deno run --unstable-webgpu --unstable-sloppy-imports --allow-env --allow-read tests/gpu/smoke.ts",
     "bench": "tsx bench/run.ts",
     "bench:compare": "bash bench/ab.sh",
     "clean": "rm -rf dist",

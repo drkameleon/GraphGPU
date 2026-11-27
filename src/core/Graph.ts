@@ -103,6 +103,9 @@ export class Graph {
      */
     structureVersion: number = 0;
 
+    /** Bumped when edge colors change in bulk (e.g. palette switch) */
+    edgeColorVersion: number = 0;
+
     // --- Default node size ---
     private defaultNodeSize: number;
 
@@ -567,6 +570,7 @@ export class Graph {
             this.edgeColors[id * 3 + 1] = bg[1];
             this.edgeColors[id * 3 + 2] = bg[2];
         }
+        this.edgeColorVersion++;
         this.dirtyNodes = true;
         this.dirtyEdges = true;
     }

@@ -7,5 +7,6 @@
     "declarationMap": false,
     "sourceMap": false
   },
-  "include": ["../src/**/*.ts", "./**/*.ts"]
+  "include": ["../src/**/*.ts", "./**/*.ts"],
+  "exclude": ["./gpu"]
 }
