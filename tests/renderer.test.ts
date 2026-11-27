@@ -299,6 +299,32 @@ describe('Renderer: node uploads', () => {
     });
 });
 
+describe('Renderer: events', () => {
+    it('emits render:frame with stats for every drawn frame', async () => {
+        const frames: { fps: number; frameTime: number; nodeCount: number; edgeCount: number }[] = [];
+        g.on<typeof frames[number]>('render:frame', (e) => frames.push(e.target));
+        await flushFrames(3); // only the first one draws
+        expect(frames).toHaveLength(1);
+        expect(frames[0].nodeCount).toBe(10);
+        expect(frames[0].edgeCount).toBe(9);
+        expect(frames[0].frameTime).toBeGreaterThanOrEqual(0);
+    });
+
+    it('emits layout events for the GPU layout too', async () => {
+        const log: string[] = [];
+        g.on('layout:start', (e) => log.push(`start:${(e.target as { gpu: boolean }).gpu}`));
+        g.on('layout:tick', () => log.push('tick'));
+        g.on('layout:stop', () => log.push('stop'));
+        await flushFrames(1);
+        await g.startGPULayout({ stepsPerFrame: 1, maxIterations: 1000 });
+        await flushFrames(2);
+        g.stopLayout();
+        expect(log[0]).toBe('start:true');
+        expect(log.filter(e => e === 'tick').length).toBeGreaterThanOrEqual(2);
+        expect(log.at(-1)).toBe('stop');
+    });
+});
+
 describe('Renderer: robustness', () => {
     it('recovers from a lost device', async () => {
         await flushFrames(1);

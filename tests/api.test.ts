@@ -83,3 +83,41 @@ describe('GraphGPU: palette', () => {
         expect(Array.from(g.colors.subarray(red * 4, red * 4 + 3))).toEqual([1, 0, 0]);
     });
 });
+
+describe('GraphGPU: layout events', () => {
+    function record() {
+        const log: string[] = [];
+        const ticks: { iteration: number; energy?: number }[] = [];
+        g.on('layout:start', () => log.push('start'));
+        g.on<{ iteration: number; energy?: number }>('layout:tick', (e) => { log.push('tick'); ticks.push(e.target); });
+        g.on('layout:stop', () => log.push('stop'));
+        return { log, ticks };
+    }
+
+    it('emits start, ticks and stop', () => {
+        const { log, ticks } = record();
+        g.startLayout({ minVelocity: 0 });
+        flushFrames(3);
+        g.stopLayout();
+        expect(log).toEqual(['start', 'tick', 'tick', 'tick', 'stop']);
+        expect(ticks.map(t => t.iteration)).toEqual([3, 6, 9]);
+        expect(ticks.every(t => typeof t.energy === 'number')).toBe(true);
+    });
+
+    it('emits stop when the layout settles by itself', () => {
+        const { log } = record();
+        g.startLayout({ maxIterations: 6, minVelocity: 0 });
+        flushFrames(10);
+        expect(log.at(-1)).toBe('stop');
+        expect(log.filter(e => e === 'stop')).toHaveLength(1);
+    });
+
+    it('emits start for animated mode, and stop + start when restarted', () => {
+        const { log } = record();
+        g.setAnimated(true);
+        expect(log).toEqual(['start']);
+        g.startLayout();
+        expect(log).toEqual(['start', 'stop', 'start']);
+        g.stopLayout();
+    });
+});

@@ -57,6 +57,8 @@ export class GraphGPU {
         // Camera (temporary - renderer creates the real one)
         this.camera = this.renderer.getCamera();
 
+        this.renderer.onFrame = (stats) => this.controls.emit('render:frame', stats);
+
         // The GPU layout lives on the device: stop it if that's lost
         this.renderer.onDeviceLost = () => this.stopGPULayout();
 
@@ -296,12 +298,22 @@ export class GraphGPU {
             ...opts,
         });
 
+        this.wireLayoutEvents(this.layout);
+
         if (wasAnimated) {
             this.layout.setAnimated(true);
             this.controls.setAnimatedMode(true, this.layout);
         } else {
             this.layout.start();
         }
+    }
+
+    /** Forward a layout's lifecycle to `layout:start` / `layout:tick` / `layout:stop` */
+    private wireLayoutEvents(layout: ForceLayout | GPUForceLayout): void {
+        layout.onStart = () => this.controls.emit('layout:start', { gpu: layout instanceof GPUForceLayout });
+        layout.onTick = (iteration: number, energy?: number) =>
+            this.controls.emit('layout:tick', { iteration, energy });
+        layout.onStop = () => this.controls.emit('layout:stop', null);
     }
 
     /**
@@ -321,6 +333,7 @@ export class GraphGPU {
                 type: 'force',
                 ...this.options.layout,
             });
+            this.wireLayoutEvents(this.layout);
         }
         return this.layout.step(steps);
     }
@@ -354,6 +367,7 @@ export class GraphGPU {
 
         // Shares the renderer's positions buffer: no per-frame copies
         this.gpuLayout = new GPUForceLayout(device, this.graph, opts, this.renderer);
+        this.wireLayoutEvents(this.gpuLayout);
         await this.gpuLayout.start();
     }
 
@@ -532,6 +546,7 @@ export class GraphGPU {
                 type: 'force',
                 ...this.options.layout,
             });
+            this.wireLayoutEvents(this.layout);
         }
         // The CPU layout drives animated mode: don't run both
         if (enabled) this.stopGPULayout();

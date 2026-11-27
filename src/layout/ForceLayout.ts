@@ -71,6 +71,7 @@ export class ForceLayout {
     private pinned: Set<number> = new Set();
 
     // Callbacks
+    onStart?: () => void;
     onTick?: (iteration: number, energy: number) => void;
     onStop?: () => void;
 
@@ -142,6 +143,7 @@ export class ForceLayout {
         if (!this.animated) this.iteration = 0;
 
         this.ensureBuffers();
+        this.onStart?.();
 
         const loop = () => {
             if (!this.running) return;

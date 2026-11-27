@@ -110,6 +110,11 @@ export class GPUForceLayout {
     private target: PositionTarget | null;
     private sharing = false;
 
+    // Callbacks
+    onStart?: () => void;
+    onTick?: (iteration: number) => void;
+    onStop?: () => void;
+
     constructor(
         device: GPUDevice,
         graph: Graph,
@@ -404,6 +409,7 @@ export class GPUForceLayout {
         this.beginSharing();
         this.uploadData();
         this.uploadParams();
+        this.onStart?.();
 
         const loop = () => {
             if (!this.running || generation !== this.generation) return;
@@ -412,6 +418,7 @@ export class GPUForceLayout {
             this.syncWithGraph();
             this.dispatchSteps(this.config.stepsPerFrame);
             this.iteration += this.config.stepsPerFrame;
+            this.onTick?.(this.iteration);
             if (this.sharing) this.target!.positionsChanged();
 
             // Never wait on the GPU: refresh the CPU copy in the
@@ -434,12 +441,14 @@ export class GPUForceLayout {
 
     /** Stop stepping; in shared mode, sync the CPU copy before handing positions back */
     private finish(): void {
+        const wasRunning = this.running;
         this.running = false;
         const generation = ++this.generation;
         if (this.animationId) {
             cancelAnimationFrame(this.animationId);
             this.animationId = 0;
         }
+        if (wasRunning) this.onStop?.();
         if (!this.sharing) return;
         void this.finalSync(generation);
     }
@@ -468,6 +477,7 @@ export class GPUForceLayout {
     }
 
     destroy(): void {
+        if (this.running) this.onStop?.();
         this.running = false;
         this.generation++;
         if (this.animationId) {
