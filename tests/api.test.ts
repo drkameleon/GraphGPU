@@ -223,6 +223,53 @@ describe('GraphGPU: fitView', () => {
     });
 });
 
+describe('GraphGPU: focusing', () => {
+    function place() {
+        g.clear();
+        const a = g.put('n', { name: 'a' }, { x: -0.8, y: 0.2 });
+        const b = g.put('n', { name: 'b' }, { x: -0.4, y: 0.2 });
+        g.put('n', { name: 'far' }, { x: 5, y: 5 });
+        return [a, b];
+    }
+
+    it('fits just the given nodes', () => {
+        const [a, b] = place();
+        g.fitView(0.1, [a, b]);
+        const all = g.getView();
+        expect(all.x).toBeCloseTo(-0.6);
+        expect(all.y).toBeCloseTo(0.2);
+
+        g.selectNodes([a, b]);
+        g.resetView();
+        g.fitView(0.1, g.getSelectedNodes());
+        expect(g.getView()).toEqual(all);
+    });
+
+    it('skips removed nodes and ignores an empty list', () => {
+        const [a] = place();
+        g.setView(1, 1, 2);
+        g.fitView(0.1, []);
+        g.fitView(0.1, [999]);
+        expect(g.getView()).toMatchObject({ x: 1, y: 1, zoom: 2 });
+        g.fitView(0.1, [a, 999]);
+        expect(g.getView().x).toBeCloseTo(-0.8);
+    });
+
+    it('centers on a node, optionally zooming', () => {
+        const [a, b] = place();
+        g.setView(0, 0, 1.5);
+        g.focusNode(a);
+        expect(g.getView().x).toBeCloseTo(-0.8);
+        expect(g.getView().zoom).toBe(1.5);
+        expect(g.getView().y).toBeCloseTo(0.2);
+        g.focusNode(b, 4);
+        expect(g.getView().x).toBeCloseTo(-0.4);
+        expect(g.getView().zoom).toBe(4);
+        g.focusNode(999);
+        expect(g.getView().x).toBeCloseTo(-0.4);
+    });
+});
+
 describe('GraphGPU: palette', () => {
     it('keeps explicit node colors when switching palettes', () => {
         const red = g.put('custom', 'Red', {}, { color: '#ff0000' });
