@@ -21,7 +21,7 @@ const GROWTH_FACTOR = 2;
 const DEFAULT_MAX_NODES = 4096;
 const DEFAULT_MAX_EDGES = 8192;
 
-function growBuffer<T extends Float32Array | Uint32Array>(
+function growBuffer<T extends Float32Array | Uint32Array | Uint8Array>(
     old: T,
     newLength: number,
 ): T {
@@ -58,6 +58,9 @@ export class Graph {
     positions: Float32Array;   // [x0, y0, x1, y1, ...]
     colors: Float32Array;      // [r0, g0, b0, a0, r1, ...]
     sizes: Float32Array;       // [s0, s1, ...]
+
+    /** 1 if a node's color was set explicitly (kept on palette changes) */
+    private customColor: Uint8Array;
 
     // --- Node metadata (not uploaded to GPU) ---
     private nodeTags: string[];
@@ -117,6 +120,7 @@ export class Graph {
         this.positions = new Float32Array(this.nodeCapacity * 2);
         this.colors = new Float32Array(this.nodeCapacity * 4);
         this.sizes = new Float32Array(this.nodeCapacity);
+        this.customColor = new Uint8Array(this.nodeCapacity);
         this.nodeTags = new Array(this.nodeCapacity);
         this.nodeProperties = new Array(this.nodeCapacity);
 
@@ -194,6 +198,7 @@ export class Graph {
             ? parseColor(input.color)
             : tagColor.bg;
         writeColorToBuffer(this.colors, id * 4, color);
+        this.customColor[id] = input.color ? 1 : 0;
 
         // Metadata
         this.nodeTags[id] = input.tag;
@@ -228,6 +233,7 @@ export class Graph {
         this.colors[id * 4 + 2] = 0;
         this.colors[id * 4 + 3] = 0;
         this.sizes[id] = 0;
+        this.customColor[id] = 0;
 
         // Clear metadata
         this.nodeTags[id] = undefined!;
@@ -286,6 +292,7 @@ export class Graph {
     /** Update node color */
     setNodeColor(id: NodeId, color: RGBA): void {
         writeColorToBuffer(this.colors, id * 4, color);
+        this.customColor[id] = 1;
         this.dirtyNodes = true;
     }
 
@@ -528,6 +535,7 @@ export class Graph {
         this.positions.fill(0);
         this.colors.fill(0);
         this.sizes.fill(0);
+        this.customColor.fill(0);
         this.edgeIndices.fill(0);
         this.edgeWeights.fill(0);
         this.edgeColors.fill(0);
@@ -537,6 +545,28 @@ export class Graph {
         this.edgeTags.length = 0;
         this.edgeProperties.length = 0;
         this.tagColors.clear();
+        this.dirtyNodes = true;
+        this.dirtyEdges = true;
+    }
+
+    /**
+     * Re-apply tag colors (e.g. after a palette change) to all nodes
+     * and tagged edges. Nodes with an explicit color keep it.
+     */
+    applyTagColors(): void {
+        for (let id = 0; id < this.nodeCount; id++) {
+            const tag = this.nodeTags[id];
+            if (tag === undefined || this.customColor[id]) continue;
+            writeColorToBuffer(this.colors, id * 4, this.tagColors.getColor(tag).bg);
+        }
+        for (let id = 0; id < this.edgeCount; id++) {
+            const tag = this.edgeTags[id];
+            if (!tag) continue; // removed, or untagged (stays gray)
+            const bg = this.tagColors.getColor(tag).bg;
+            this.edgeColors[id * 3] = bg[0];
+            this.edgeColors[id * 3 + 1] = bg[1];
+            this.edgeColors[id * 3 + 2] = bg[2];
+        }
         this.dirtyNodes = true;
         this.dirtyEdges = true;
     }
@@ -560,6 +590,7 @@ export class Graph {
         this.positions = growBuffer(this.positions, newCapacity * 2);
         this.colors = growBuffer(this.colors, newCapacity * 4);
         this.sizes = growBuffer(this.sizes, newCapacity);
+        this.customColor = growBuffer(this.customColor, newCapacity);
         this.nodeTags.length = newCapacity;
         this.nodeProperties.length = newCapacity;
         this.nodeCapacity = newCapacity;

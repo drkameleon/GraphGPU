@@ -355,6 +355,65 @@ describe('Graph: counts', () => {
     });
 });
 
+describe('Graph: tag colors', () => {
+    const rgb = (g: Graph, id: number) => Array.from(g.colors.subarray(id * 4, id * 4 + 3));
+
+    it('re-applies tag colors after a palette change', () => {
+        const g = new Graph({ palette: 'pastel' });
+        const a = g.addNode({ tag: 'person' });
+        const b = g.addNode({ tag: 'person' });
+        const e = g.addEdge({ tag: 'knows', source: a, target: b });
+        const before = rgb(g, a);
+
+        g.tagColors.setPalette('vibrant');
+        g.applyTagColors();
+
+        expect(rgb(g, a)).not.toEqual(before);
+        expect(rgb(g, a)).toEqual(rgb(g, b));
+        const bg = g.tagColors.getColor('knows').bg;
+        expect(Array.from(g.edgeColors.subarray(e * 3, e * 3 + 3))).toEqual(
+            Array.from(new Float32Array(bg.slice(0, 3))),
+        );
+    });
+
+    it('keeps explicit node colors', () => {
+        const g = new Graph({ palette: 'pastel' });
+        const a = g.addNode({ tag: 'person', color: '#ff0000' });
+        const b = g.addNode({ tag: 'person' });
+        g.setNodeColor(b, [0, 0, 1, 1]);
+
+        g.tagColors.setPalette('vibrant');
+        g.applyTagColors();
+        expect(rgb(g, a)).toEqual([1, 0, 0]);
+        expect(rgb(g, b)).toEqual([0, 0, 1]);
+    });
+
+    it('forgets a custom color when its slot is reused', () => {
+        const g = new Graph({ palette: 'pastel' });
+        g.addNode({ tag: 'x' });
+        const a = g.addNode({ tag: 'person', color: '#ff0000' });
+        g.addNode({ tag: 'x' });
+        g.removeNode(a);
+        const b = g.addNode({ tag: 'person' });
+        expect(b).toBe(a);
+
+        g.tagColors.setPalette('vibrant');
+        g.applyTagColors();
+        expect(rgb(g, b)).not.toEqual([1, 0, 0]);
+    });
+
+    it('keeps untagged edges gray', () => {
+        const g = new Graph();
+        const a = g.addNode({ tag: 'n' });
+        const b = g.addNode({ tag: 'n' });
+        const e = g.addEdge({ tag: '', source: a, target: b });
+        const gray = Array.from(g.edgeColors.subarray(e * 3, e * 3 + 3));
+        g.tagColors.setPalette('vibrant');
+        g.applyTagColors();
+        expect(Array.from(g.edgeColors.subarray(e * 3, e * 3 + 3))).toEqual(gray);
+    });
+});
+
 describe('Graph: queries', () => {
     function sample() {
         const g = new Graph();
