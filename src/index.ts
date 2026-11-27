@@ -13,7 +13,8 @@ import { Renderer } from './core/Renderer';
 import { Camera } from './core/Camera';
 import { InteractionController } from './interaction/Controls';
 import { ForceLayout } from './layout/ForceLayout';
-import { GPUForceLayout } from './layout/GPUForceLayout';
+import { GPUForceLayout, type GPUForceConfig } from './layout/GPUForceLayout';
+import { resolveLayoutOptions } from './layout/options';
 import { WorkerForceLayout } from './layout/WorkerForceLayout';
 import { circularLayout, gridLayout, type StaticLayoutOptions } from './layout/StaticLayouts';
 import { PALETTES } from './utils/palette';
@@ -307,11 +308,7 @@ export class GraphGPU {
         this.stopLayout();
         this.layout?.destroy();
 
-        this.layout = this.createLayout({
-            type: 'force',
-            ...opts,
-            useWorker: opts?.useWorker ?? this.options.layout?.useWorker,
-        });
+        this.layout = this.createLayout(opts);
 
         if (wasAnimated) {
             this.layout.setAnimated(true);
@@ -321,8 +318,9 @@ export class GraphGPU {
         }
     }
 
-    /** A CPU force layout, in a worker if asked for */
-    private createLayout(opts: LayoutOptions): ForceLayout | WorkerForceLayout {
+    /** A CPU force layout (`opts` over the `layout` options), in a worker if asked for */
+    private createLayout(overrides?: object): ForceLayout | WorkerForceLayout {
+        const opts = resolveLayoutOptions<LayoutOptions>(this.options.layout, overrides, { type: 'force' });
         const layout = opts.useWorker
             ? new WorkerForceLayout(this.graph, opts)
             : new ForceLayout(this.graph, opts);
@@ -351,10 +349,7 @@ export class GraphGPU {
      */
     stepLayout(steps: number = 1): number {
         if (!this.layout) {
-            this.layout = this.createLayout({
-                type: 'force',
-                ...this.options.layout,
-            });
+            this.layout = this.createLayout();
         }
         return this.layout.step(steps);
     }
@@ -389,7 +384,8 @@ export class GraphGPU {
         }
 
         // Shares the renderer's positions buffer: no per-frame copies
-        this.gpuLayout = new GPUForceLayout(device, this.graph, opts, this.renderer);
+        const config = resolveLayoutOptions<Partial<GPUForceConfig>>(this.options.layout, opts);
+        this.gpuLayout = new GPUForceLayout(device, this.graph, config, this.renderer);
         this.wireLayoutEvents(this.gpuLayout);
         await this.gpuLayout.start();
     }
@@ -595,10 +591,7 @@ export class GraphGPU {
     setAnimated(enabled: boolean): void {
         if (!this.layout) {
             // Create layout if not yet started
-            this.layout = this.createLayout({
-                type: 'force',
-                ...this.options.layout,
-            });
+            this.layout = this.createLayout();
         }
         // The CPU layout drives animated mode: don't run both
         if (enabled) this.stopGPULayout();

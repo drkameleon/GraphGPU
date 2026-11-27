@@ -25,6 +25,16 @@ afterEach(() => {
 // -----------------------------------------------------------
 
 describe('GPUForceLayout', () => {
+    it('never lets an unset option override a default', () => {
+        const g = new Graph();
+        g.addNode({ tag: 'n', x: 0, y: 0 });
+        const layout = new GPUForceLayout(fakeDevice(), g, { damping: undefined, gravity: 0 } as object);
+        const config = (layout as unknown as { config: Record<string, unknown> }).config;
+        expect(config.damping).toBe(0.18);
+        expect(config.centralGravity).toBe(0);
+        layout.destroy();
+    });
+
     it('reads positions back after stepping', async () => {
         const g = new Graph();
         g.addNode({ tag: 'n', x: 0.5, y: -0.5 });

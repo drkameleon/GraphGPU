@@ -17,6 +17,7 @@
 import type { LayoutOptions } from '../types';
 import type { Graph } from '../core/Graph';
 import { QuadTree } from './QuadTree';
+import { resolveLayoutOptions } from './options';
 
 export interface ForceLayoutConfig {
     // ── Repulsion (gravitational) ──
@@ -96,8 +97,9 @@ export class ForceLayout {
 
     constructor(
         private graph: LayoutGraph,
-        opts?: LayoutOptions,
+        options?: LayoutOptions,
     ) {
+        const opts = resolveLayoutOptions<Partial<LayoutOptions>>(options);
         this.config = {
             gravitationalConstant: opts?.gravitationalConstant ?? DEFAULTS.gravitationalConstant,
             barnesHutTheta: opts?.barnesHutTheta ?? DEFAULTS.barnesHutTheta,

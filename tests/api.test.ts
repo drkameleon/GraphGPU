@@ -67,6 +67,23 @@ describe('GraphGPU: layout lifecycle', () => {
         expect(frames.size).toBe(0);
     });
 
+    it('uses the layout options given at construction', () => {
+        const c = document.createElement('canvas');
+        const h = new GraphGPU({ canvas: c, layout: { type: 'force', centralGravity: 0, gravitationalConstant: 0 } });
+        h.put('n', { name: 'lonely' });
+        const x = h.positions[0], y = h.positions[1];
+        h.startLayout();
+        flushFrames(3);
+        // No repulsion, no gravity, no edges: nothing moves
+        expect([h.positions[0], h.positions[1]]).toEqual([x, y]);
+
+        // ...unless overridden per call
+        h.startLayout({ centralGravity: 0.05 });
+        flushFrames(3);
+        expect([h.positions[0], h.positions[1]]).not.toEqual([x, y]);
+        h.destroy();
+    });
+
     it('runs the layout in a worker with useWorker', () => {
         const workers: { url: string; type?: string; listeners: Record<string, (e: unknown) => void> }[] = [];
         vi.stubGlobal('Worker', class {
