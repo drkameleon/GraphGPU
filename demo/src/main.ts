@@ -191,6 +191,13 @@ createApp({
             g?.fitView(0.15);
         }
 
+        function arrange(type: 'circular' | 'grid'): void {
+            if (!g) return;
+            g.applyLayout(type);
+            layoutRunning.value = false;
+            g.fitView(0.15);
+        }
+
         function resetGraph(): void {
             if (!g) return;
             if (layoutRunning.value) g.stopLayout();
@@ -401,6 +408,7 @@ createApp({
                 interaction: {
                     pan: true, zoom: true, dragNodes: true,
                     hover: true, selection: true, multiSelect: false,
+                    lasso: true, // shift-drag to select a box of nodes
                 },
             });
 
@@ -501,7 +509,7 @@ createApp({
             tooltipVisible, tooltipStyle, tooltipTag, tooltipName, tooltipProps, tooltipColor,
             legendItems, paletteNames,
             editModal, deleteModal, settingsModal,
-            toggleLayout, fitView, resetGraph, toggleAnimated, toggleDarkMode,
+            toggleLayout, fitView, arrange, resetGraph, toggleAnimated, toggleDarkMode,
             switchPalette, getPalettePreview,
             showEditModal, saveEdit, deleteSelected, confirmDelete,
             onSettingChange, onToggleSetting, resetSettings, stressTest,
