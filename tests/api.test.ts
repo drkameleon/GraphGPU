@@ -134,4 +134,10 @@ describe('GraphGPU: static layouts', () => {
         const r = Math.hypot(g.positions[0], g.positions[1]);
         expect(Math.hypot(g.positions[2], g.positions[3])).toBeCloseTo(r);
     });
+
+    it('spaces nodes by their size by default, so they never overlap', () => {
+        g.setNodeSize(8); // world diameter: 6 × 8 × 0.01 × 2 = 0.96
+        g.applyLayout('grid');
+        expect(Math.abs(g.positions[2] - g.positions[0])).toBeCloseTo(0.96 * 1.5);
+    });
 });
