@@ -6,6 +6,7 @@ on:
             - 'src/**'
             - 'bench/**'
             - 'tests/helpers.ts'
+            - 'tests/fake-device.ts'
             - 'package.json'
             - 'package-lock.json'
             - '.github/workflows/bench.yml'
