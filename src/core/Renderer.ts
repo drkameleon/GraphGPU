@@ -765,202 +765,334 @@ export class Renderer implements PositionTarget {
         this.labelCtx = this.labelCanvas.getContext('2d');
     }
 
-    /**
-     * Convert world position to CSS-pixel screen position.
-     * This duplicates the Camera math but returns CSS pixels directly.
-     */
-    private worldToCSS(wx: number, wy: number): [number, number] {
-        const m = this.camera.matrix;
-        // matrix is col-major std140: col0=[m0,m1,_,_] col1=[m4,m5,_,_] col2=[m8,m9,_,_]
-        const ndcX = wx * m[0] + wy * m[4] + m[8];
-        const ndcY = wx * m[1] + wy * m[5] + m[9];
-        // NDC [-1,1] → CSS pixels [0, clientWidth]
-        const cw = this.canvas.clientWidth;
-        const ch = this.canvas.clientHeight;
-        const sx = (ndcX + 1) * 0.5 * cw;
-        const sy = (-ndcY + 1) * 0.5 * ch;
-        return [sx, sy];
+    // =========================================================
+    // Label overlay
+    // =========================================================
+    // Per frame, allocation-free where it matters:
+    //   1. project active nodes to screen (typed arrays)
+    //   2. collect edge label candidates (culled & measured)
+    //   3. bucket node circles near those labels into a grid, so
+    //      each label only tests nearby nodes for overlap
+    //   4. draw edge labels, then node labels on top
+    // =========================================================
+
+    // Reused per-frame buffers
+    // (Float64, so label placement matches plain JS number math exactly)
+    private labelSX: Float64Array = new Float64Array(0);
+    private labelSY: Float64Array = new Float64Array(0);
+    private labelR: Float64Array = new Float64Array(0);
+    private labelCorners: Float64Array = new Float64Array(0); // 8 per candidate
+    private labelInfo: Float64Array = new Float64Array(0);    // sx, sy, angle, offset per candidate
+    private labelEdges: Int32Array = new Int32Array(0);
+    private labelFonts: string[] = [];
+
+    // Text measurement caches (cleared when they grow too big)
+    private textWidths = new Map<string, number>();
+    private truncations = new Map<string, string | null>();
+
+    private measure(ctx: CanvasRenderingContext2D, font: string, text: string): number {
+        const key = font + '\u0000' + text;
+        let w = this.textWidths.get(key);
+        if (w === undefined) {
+            if (this.textWidths.size > 20000) this.textWidths.clear();
+            w = ctx.measureText(text).width;
+            this.textWidths.set(key, w);
+        }
+        return w;
+    }
+
+    /** Label as displayed within maxW (ellipsized), or null if it can't fit */
+    private fitLabel(ctx: CanvasRenderingContext2D, font: string, label: string, maxW: number): string | null {
+        const key = font + '\u0000' + maxW + '\u0000' + label;
+        const cached = this.truncations.get(key);
+        if (cached !== undefined) return cached;
+        if (this.truncations.size > 20000) this.truncations.clear();
+
+        let disp = label;
+        if (this.measure(ctx, font, disp) > maxW) {
+            let lo = 1, hi = label.length;
+            while (lo < hi) {
+                const mid = (lo + hi + 1) >> 1;
+                if (this.measure(ctx, font, label.slice(0, mid) + '…') <= maxW) lo = mid; else hi = mid - 1;
+            }
+            disp = label.slice(0, lo) + '…';
+        }
+        const result = this.measure(ctx, font, disp) > maxW ? null : disp;
+        this.truncations.set(key, result);
+        return result;
     }
 
     /** Render labels on Canvas2D overlay */
     private renderOverlay(): void {
+        const lctx = this.labelCtx;
+        const labelCanvas = this.labelCanvas;
+        if (!lctx || !labelCanvas) return;
+
         const pr = this.pixelRatio;
         const cw = this.canvas.clientWidth;
         const ch = this.canvas.clientHeight;
         const tw = Math.round(cw * pr);
         const th = Math.round(ch * pr);
 
-        // ---- Labels (in front of WebGPU canvas) ----
-        if (this.labelCtx && this.labelCanvas) {
-            if (this.labelCanvas.width !== tw || this.labelCanvas.height !== th) {
-                this.labelCanvas.width = tw;
-                this.labelCanvas.height = th;
-            }
-            const lctx = this.labelCtx;
-            lctx.clearRect(0, 0, tw, th);
-            lctx.save();
-            lctx.scale(pr, pr);
-            lctx.textAlign = 'center';
-            lctx.textBaseline = 'middle';
-
-            const positions = this.graph.positions;
-            const sizes = this.graph.sizes;
-
-            const camZoomGlobal = Math.abs(this.camera.matrix[0]);
-
-            // ---- Pre-compute node screen positions & radii for overlap culling ----
-            const nodeScreenData: { sx: number; sy: number; r: number }[] = [];
-            for (const id of this.graph.activeNodeIds()) {
-                const wx = positions[id * 2];
-                const wy = positions[id * 2 + 1];
-                const [sx, sy] = this.worldToCSS(wx, wy);
-                const nodeWorldSize = sizes[id] * this.nodeScale * 0.01;
-                const nodeScreenR = nodeWorldSize * camZoomGlobal * cw * 0.5;
-                nodeScreenData[id] = { sx, sy, r: nodeScreenR };
-            }
-
-            // ---- Edge labels (drawn FIRST so node labels paint over them) ----
-            const baseNodeWorldSize = this.nodeScale * 0.01;
-            const projectedNodeR = baseNodeWorldSize * camZoomGlobal * cw * 0.5;
-            const edgeWidthPx = Math.max(2.5, projectedNodeR * 1.0);
-
-            // Only show edge labels when node labels are visible.
-            // Node labels appear when nodeScreenR >= 16. Check any active node.
-            let anyNodeLabelVisible = false;
-            for (const id of this.graph.activeNodeIds()) {
-                if (nodeScreenData[id] && nodeScreenData[id].r >= 16) {
-                    anyNodeLabelVisible = true;
-                    break;
-                }
-            }
-
-            if (anyNodeLabelVisible) {
-                lctx.textAlign = 'center';
-                lctx.textBaseline = 'middle';
-
-                const edgeIndices = this.graph.edgeIndices;
-                const pos = this.graph.positions;
-
-                for (const eid of this.graph.activeEdgeIds()) {
-                    const src = edgeIndices[eid * 2];
-                    const tgt = edgeIndices[eid * 2 + 1];
-                    if (!this.graph.isNodeActive(src) || !this.graph.isNodeActive(tgt)) continue;
-
-                    const edge = this.graph.getEdge(eid);
-                    if (!edge || !edge.tag) continue;
-
-                    // Use the average screen radius of src and tgt nodes.
-                    // This is the CORRECT nodeScreenR (includes sizes[id] * nodeScale).
-                    const srcR = nodeScreenData[src]?.r ?? 0;
-                    const tgtR = nodeScreenData[tgt]?.r ?? 0;
-                    const avgNodeR = (srcR + tgtR) * 0.5;
-
-                    // Edge font = 65% of what the node label would be WITHOUT the 22px cap.
-                    // No cap on edge labels — they scale with zoom just like everything else.
-                    const edgeFontSize = Math.max(7, avgNodeR * 0.28 * 0.65);
-
-                    lctx.font = `500 ${edgeFontSize}px -apple-system,"Segoe UI",Helvetica,Arial,sans-serif`;
-                    lctx.fillStyle = 'rgba(160,155,175,0.85)';
-
-                    const labelOffset = edgeWidthPx * 0.5 + edgeFontSize * 0.55 + 3;
-
-                    // Midpoint in world coords
-                    const mx = (pos[src * 2] + pos[tgt * 2]) * 0.5;
-                    const my = (pos[src * 2 + 1] + pos[tgt * 2 + 1]) * 0.5;
-                    const [sx, sy] = this.worldToCSS(mx, my);
-
-                    if (sx < -80 || sx > cw + 80 || sy < -40 || sy > ch + 40) continue;
-
-                    // Compute edge angle for rotated text
-                    const [sx1, sy1] = this.worldToCSS(pos[src * 2], pos[src * 2 + 1]);
-                    const [sx2, sy2] = this.worldToCSS(pos[tgt * 2], pos[tgt * 2 + 1]);
-                    let angle = Math.atan2(sy2 - sy1, sx2 - sx1);
-
-                    if (angle > Math.PI / 2) angle -= Math.PI;
-                    if (angle < -Math.PI / 2) angle += Math.PI;
-
-                    const edgeLen = Math.hypot(sx2 - sx1, sy2 - sy1);
-                    if (edgeLen < 40) continue;
-
-                    // Skip if any part of the label overlaps any node circle.
-                    // Test the label's bounding box corners (rotated) against node circles.
-                    const textW = lctx.measureText(edge.tag).width * 0.5 + 4;
-                    const textH = edgeFontSize * 0.6 + 4;
-                    // Four corners of the label bbox relative to (sx, sy), rotated by angle
-                    const cosA = Math.cos(angle);
-                    const sinA = Math.sin(angle);
-                    const offY = -labelOffset;
-                    const corners = [
-                        { x: sx + cosA * (-textW) - sinA * (offY - textH), y: sy + sinA * (-textW) + cosA * (offY - textH) },
-                        { x: sx + cosA * ( textW) - sinA * (offY - textH), y: sy + sinA * ( textW) + cosA * (offY - textH) },
-                        { x: sx + cosA * ( textW) - sinA * (offY + textH), y: sy + sinA * ( textW) + cosA * (offY + textH) },
-                        { x: sx + cosA * (-textW) - sinA * (offY + textH), y: sy + sinA * (-textW) + cosA * (offY + textH) },
-                    ];
-                    let overlapsNode = false;
-                    for (const nid of this.graph.activeNodeIds()) {
-                        const nd = nodeScreenData[nid];
-                        if (!nd) continue;
-                        const rSq = nd.r * nd.r;
-                        for (const c of corners) {
-                            const dx = c.x - nd.sx;
-                            const dy = c.y - nd.sy;
-                            if (dx * dx + dy * dy < rSq) {
-                                overlapsNode = true;
-                                break;
-                            }
-                        }
-                        if (overlapsNode) break;
-                    }
-                    if (overlapsNode) continue;
-
-                    lctx.save();
-                    lctx.translate(sx, sy);
-                    lctx.rotate(angle);
-                    lctx.fillText(edge.tag, 0, -labelOffset);
-                    lctx.restore();
-                }
-            }
-
-            // ---- Node labels (drawn AFTER edge labels so they paint on top) ----
-            for (const id of this.graph.activeNodeIds()) {
-                const nd = nodeScreenData[id];
-                if (!nd) continue;
-                const { sx, sy, r: nodeScreenR } = nd;
-
-                if (sx < -60 || sx > cw + 60 || sy < -60 || sy > ch + 60) continue;
-                if (nodeScreenR < 16) continue;
-
-                const node = this.graph.getNode(id);
-                if (!node) continue;
-                const label = (node.properties.name ?? node.properties.title ?? node.tag) as string;
-                if (!label) continue;
-
-                const fontSize = Math.max(7, Math.min(nodeScreenR * 0.28, 22));
-                lctx.font = `600 ${fontSize}px -apple-system,"Segoe UI",Helvetica,Arial,sans-serif`;
-
-                const maxW = nodeScreenR * 1.6;
-                let disp = label;
-                if (lctx.measureText(disp).width > maxW) {
-                    let lo = 1, hi = label.length;
-                    while (lo < hi) {
-                        const mid = (lo + hi + 1) >> 1;
-                        if (lctx.measureText(label.slice(0, mid) + '…').width <= maxW) lo = mid; else hi = mid - 1;
-                    }
-                    disp = label.slice(0, lo) + '…';
-                }
-                if (lctx.measureText(disp).width > maxW) continue;
-
-                const r = this.graph.colors[id * 4];
-                const g = this.graph.colors[id * 4 + 1];
-                const b = this.graph.colors[id * 4 + 2];
-                const lum = r * 0.2126 + g * 0.7152 + b * 0.0722;
-                lctx.fillStyle = lum > 0.189 ? 'rgba(0,0,0,0.88)' : 'rgba(255,255,255,0.93)';
-
-                lctx.fillText(disp, sx, sy);
-            }
-
-            lctx.restore();
+        if (labelCanvas.width !== tw || labelCanvas.height !== th) {
+            labelCanvas.width = tw;
+            labelCanvas.height = th;
         }
+        lctx.clearRect(0, 0, tw, th);
+
+        const graph = this.graph;
+        const slots = graph.nodeSlots;
+        const positions = graph.positions;
+        const sizes = graph.sizes;
+        const m = this.camera.matrix;
+        const camZoomGlobal = Math.abs(m[0]);
+        const nodeRadius = (size: number) => size * this.nodeScale * 0.01 * camZoomGlobal * cw * 0.5;
+
+        // Labels only appear on nodes at least 16px in radius (and
+        // edge labels only alongside them): skip everything otherwise
+        let maxSize = 0;
+        for (let id = 0; id < slots; id++) {
+            if (sizes[id] > maxSize && graph.isNodeActive(id)) maxSize = sizes[id];
+        }
+        if (nodeRadius(maxSize) < 16) return;
+
+        lctx.save();
+        lctx.scale(pr, pr);
+        lctx.textAlign = 'center';
+        lctx.textBaseline = 'middle';
+
+        // ---- 1. Project nodes (world → CSS pixels) ----
+        if (this.labelSX.length < slots) {
+            this.labelSX = new Float64Array(slots * 2);
+            this.labelSY = new Float64Array(slots * 2);
+            this.labelR = new Float64Array(slots * 2);
+        }
+        const SX = this.labelSX, SY = this.labelSY, R = this.labelR;
+        for (let id = 0; id < slots; id++) {
+            const wx = positions[id * 2];
+            const wy = positions[id * 2 + 1];
+            SX[id] = (wx * m[0] + wy * m[4] + m[8] + 1) * 0.5 * cw;
+            SY[id] = (-(wx * m[1] + wy * m[5] + m[9]) + 1) * 0.5 * ch;
+            R[id] = nodeRadius(sizes[id]);
+        }
+
+        // ---- 2. Edge label candidates ----
+        const projectedNodeR = this.nodeScale * 0.01 * camZoomGlobal * cw * 0.5;
+        const edgeWidthPx = Math.max(2.5, projectedNodeR * 1.0);
+        const edgeIndices = graph.edgeIndices;
+        const edgeSlots = graph.edgeSlots;
+        if (this.labelEdges.length < edgeSlots) {
+            this.labelEdges = new Int32Array(edgeSlots * 2);
+            this.labelInfo = new Float64Array(edgeSlots * 2 * 4);
+            this.labelCorners = new Float64Array(edgeSlots * 2 * 8);
+        }
+        const cand = this.labelEdges, info = this.labelInfo, corners = this.labelCorners;
+        const fonts = this.labelFonts;
+        let count = 0;
+        let qMinX = Infinity, qMinY = Infinity, qMaxX = -Infinity, qMaxY = -Infinity;
+
+        for (let eid = 0; eid < edgeSlots; eid++) {
+            const tag = graph.getEdgeTag(eid);
+            if (!tag) continue; // removed, or untagged
+            const src = edgeIndices[eid * 2];
+            const tgt = edgeIndices[eid * 2 + 1];
+            if (!graph.isNodeActive(src) || !graph.isNodeActive(tgt)) continue;
+
+            const sx1 = SX[src], sy1 = SY[src], sx2 = SX[tgt], sy2 = SY[tgt];
+            const mx = (positions[src * 2] + positions[tgt * 2]) * 0.5;
+            const my = (positions[src * 2 + 1] + positions[tgt * 2 + 1]) * 0.5;
+            const sx = (mx * m[0] + my * m[4] + m[8] + 1) * 0.5 * cw;
+            const sy = (-(mx * m[1] + my * m[5] + m[9]) + 1) * 0.5 * ch;
+            if (sx < -80 || sx > cw + 80 || sy < -40 || sy > ch + 40) continue;
+            if (Math.hypot(sx2 - sx1, sy2 - sy1) < 40) continue;
+
+            let angle = Math.atan2(sy2 - sy1, sx2 - sx1);
+            if (angle > Math.PI / 2) angle -= Math.PI;
+            if (angle < -Math.PI / 2) angle += Math.PI;
+
+            // Edge font = 65% of what the node label would be WITHOUT the 22px cap
+            const avgNodeR = (R[src] + R[tgt]) * 0.5;
+            const edgeFontSize = Math.max(7, avgNodeR * 0.28 * 0.65);
+            const font = `500 ${edgeFontSize}px -apple-system,"Segoe UI",Helvetica,Arial,sans-serif`;
+            if (lctx.font !== font) lctx.font = font;
+
+            const labelOffset = edgeWidthPx * 0.5 + edgeFontSize * 0.55 + 3;
+            const textW = this.measure(lctx, font, tag) * 0.5 + 4;
+            const textH = edgeFontSize * 0.6 + 4;
+            const cosA = Math.cos(angle);
+            const sinA = Math.sin(angle);
+            const offY = -labelOffset;
+
+            // Four corners of the rotated label box
+            const c = count * 8;
+            corners[c] = sx + cosA * (-textW) - sinA * (offY - textH);
+            corners[c + 1] = sy + sinA * (-textW) + cosA * (offY - textH);
+            corners[c + 2] = sx + cosA * textW - sinA * (offY - textH);
+            corners[c + 3] = sy + sinA * textW + cosA * (offY - textH);
+            corners[c + 4] = sx + cosA * textW - sinA * (offY + textH);
+            corners[c + 5] = sy + sinA * textW + cosA * (offY + textH);
+            corners[c + 6] = sx + cosA * (-textW) - sinA * (offY + textH);
+            corners[c + 7] = sy + sinA * (-textW) + cosA * (offY + textH);
+            for (let k = 0; k < 8; k += 2) {
+                const x = corners[c + k], y = corners[c + k + 1];
+                if (x < qMinX) qMinX = x;
+                if (x > qMaxX) qMaxX = x;
+                if (y < qMinY) qMinY = y;
+                if (y > qMaxY) qMaxY = y;
+            }
+
+            const o = count * 4;
+            info[o] = sx;
+            info[o + 1] = sy;
+            info[o + 2] = angle;
+            info[o + 3] = labelOffset;
+            cand[count] = eid;
+            fonts[count] = font;
+            count++;
+        }
+
+        // ---- 3. Drop labels overlapping any node circle ----
+        if (count > 0) {
+            const grid = this.buildNodeGrid(slots, qMinX, qMinY, qMaxX, qMaxY);
+
+            lctx.fillStyle = 'rgba(160,155,175,0.85)';
+            for (let i = 0; i < count; i++) {
+                const c = i * 8;
+                let overlaps = false;
+                for (let k = 0; k < 8 && !overlaps; k += 2) {
+                    overlaps = grid.hits(corners[c + k], corners[c + k + 1]);
+                }
+                if (overlaps) continue;
+
+                // ---- 4a. Draw edge label ----
+                const o = i * 4;
+                const font = fonts[i];
+                if (lctx.font !== font) lctx.font = font;
+                lctx.save();
+                lctx.translate(info[o], info[o + 1]);
+                lctx.rotate(info[o + 2]);
+                lctx.fillText(graph.getEdgeTag(cand[i])!, 0, -info[o + 3]);
+                lctx.restore();
+            }
+        }
+
+        // ---- 4b. Node labels (on top of edge labels) ----
+        const colors = graph.colors;
+        for (let id = 0; id < slots; id++) {
+            const nodeScreenR = R[id];
+            if (nodeScreenR < 16 || !graph.isNodeActive(id)) continue;
+            const sx = SX[id], sy = SY[id];
+            if (sx < -60 || sx > cw + 60 || sy < -60 || sy > ch + 60) continue;
+
+            const props = graph.getNodeProperties(id)!;
+            const label = (props.name ?? props.title ?? graph.getNodeTag(id)) as string;
+            if (!label) continue;
+
+            const fontSize = Math.max(7, Math.min(nodeScreenR * 0.28, 22));
+            const font = `600 ${fontSize}px -apple-system,"Segoe UI",Helvetica,Arial,sans-serif`;
+            if (lctx.font !== font) lctx.font = font;
+
+            const disp = this.fitLabel(lctx, font, label, nodeScreenR * 1.6);
+            if (disp === null) continue;
+
+            const lum = colors[id * 4] * 0.2126 + colors[id * 4 + 1] * 0.7152 + colors[id * 4 + 2] * 0.0722;
+            lctx.fillStyle = lum > 0.189 ? 'rgba(0,0,0,0.88)' : 'rgba(255,255,255,0.93)';
+            lctx.fillText(disp, sx, sy);
+        }
+
+        lctx.restore();
+    }
+
+    // Reused grid storage (cell → node list, CSR layout)
+    private gridIds: Int32Array = new Int32Array(0);
+    private gridStart: Int32Array = new Int32Array(0);
+    private gridItems: Int32Array = new Int32Array(0);
+    private gridSpan: Int32Array = new Int32Array(4);
+
+    /**
+     * Uniform grid of the node circles that intersect the given area
+     * (in CSS pixels), for "is this point inside any node?" queries.
+     * Cells are sized by both node density and node size, so every
+     * node only lands in a few cells.
+     */
+    private buildNodeGrid(slots: number, minX: number, minY: number, maxX: number, maxY: number) {
+        const SX = this.labelSX, SY = this.labelSY, R = this.labelR;
+        const graph = this.graph;
+
+        // Nodes whose circle reaches the query area
+        if (this.gridIds.length < slots) this.gridIds = new Int32Array(slots * 2);
+        const ids = this.gridIds;
+        let n = 0;
+        let sumR = 0;
+        for (let id = 0; id < slots; id++) {
+            const r = R[id];
+            if (r <= 0) continue;
+            if (SX[id] + r < minX || SX[id] - r > maxX || SY[id] + r < minY || SY[id] - r > maxY) continue;
+            if (!graph.isNodeActive(id)) continue;
+            ids[n++] = id;
+            sumR += r;
+        }
+
+        const w = Math.max(1, maxX - minX);
+        const h = Math.max(1, maxY - minY);
+        const byDensity = Math.sqrt((w * h) / Math.max(1, n));
+        const byDiameter = n > 0 ? (2 * sumR) / n : 0;
+        const cell = Math.min(1024, Math.max(16, byDensity, byDiameter));
+        const cols = Math.ceil(w / cell) + 1;
+        const rows = Math.ceil(h / cell) + 1;
+        const cellCount = cols * rows;
+
+        // Two passes (count, then fill) into flat arrays
+        if (this.gridStart.length < cellCount + 1) this.gridStart = new Int32Array((cellCount + 1) * 2);
+        const start = this.gridStart;
+        start.fill(0, 0, cellCount + 1);
+
+        // Cell range covered by a node: [x0, x1, y0, y1]
+        const sp = this.gridSpan;
+        const span = (id: number) => {
+            const r = R[id];
+            sp[0] = Math.max(0, Math.floor((SX[id] - r - minX) / cell));
+            sp[1] = Math.min(cols - 1, Math.floor((SX[id] + r - minX) / cell));
+            sp[2] = Math.max(0, Math.floor((SY[id] - r - minY) / cell));
+            sp[3] = Math.min(rows - 1, Math.floor((SY[id] + r - minY) / cell));
+        };
+
+        let total = 0;
+        for (let i = 0; i < n; i++) {
+            span(ids[i]);
+            for (let cy = sp[2]; cy <= sp[3]; cy++) {
+                for (let cx = sp[0]; cx <= sp[1]; cx++) start[cy * cols + cx + 1]++;
+            }
+            total += (sp[1] - sp[0] + 1) * (sp[3] - sp[2] + 1);
+        }
+        for (let c = 0; c < cellCount; c++) start[c + 1] += start[c];
+
+        if (this.gridItems.length < total) this.gridItems = new Int32Array(total * 2);
+        const items = this.gridItems;
+        const fill = start.slice(0, cellCount);
+        for (let i = 0; i < n; i++) {
+            const id = ids[i];
+            span(id);
+            for (let cy = sp[2]; cy <= sp[3]; cy++) {
+                for (let cx = sp[0]; cx <= sp[1]; cx++) items[fill[cy * cols + cx]++] = id;
+            }
+        }
+
+        return {
+            hits: (x: number, y: number): boolean => {
+                const cx = Math.floor((x - minX) / cell);
+                const cy = Math.floor((y - minY) / cell);
+                if (cx < 0 || cy < 0 || cx >= cols || cy >= rows) return false;
+                const c = cy * cols + cx;
+                for (let k = start[c], end = start[c + 1]; k < end; k++) {
+                    const id = items[k];
+                    const dx = x - SX[id];
+                    const dy = y - SY[id];
+                    if (dx * dx + dy * dy < R[id] * R[id]) return true;
+                }
+                return false;
+            },
+        };
     }
 
     /** Clean up all GPU resources */

@@ -284,6 +284,16 @@ export class Graph {
         };
     }
 
+    /** Get node properties without allocating a view */
+    getNodeProperties(id: NodeId): Record<string, unknown> | undefined {
+        return this.nodeProperties[id];
+    }
+
+    /** Get edge tag without allocating */
+    getEdgeTag(id: EdgeId): string | undefined {
+        return this.edgeTags[id];
+    }
+
     /** Get node tag without allocating */
     getNodeTag(id: NodeId): string | undefined {
         return this.nodeTags[id];

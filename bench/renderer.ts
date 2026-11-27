@@ -18,9 +18,12 @@ interface Scene {
 
 const scenes: Record<string, Scene> = {};
 
-async function scene(name: string, nodes: number, edges: number, labels: boolean): Promise<void> {
+async function scene(
+    name: string, nodes: number, edges: number, labels: boolean, nodeSize?: number,
+): Promise<void> {
     const graph = randomGraph(nodes, edges, nodes);
-    const renderer = new Renderer(graph, { canvas: createCanvas(), pixelRatio: 1 });
+    for (let i = 0; i < nodes; i++) graph.setNodeProperty(i, 'name', `node ${i}`);
+    const renderer = new Renderer(graph, { canvas: createCanvas(), pixelRatio: 1, nodeSize });
     await renderer.init();
     renderer.initLabelOverlay();
     renderer.setLabelsVisible(labels);
@@ -54,11 +57,17 @@ export default {
         await scene('10k', 10_000, 20_000, false);
         await scene('100k', 100_000, 200_000, false);
         await scene('2k+labels', 2_000, 4_000, true);
+        // Smaller nodes: labels visible without the default huge nodes
+        // hiding most edge labels early (realistic dense graphs)
+        await scene('2k+labels/small', 2_000, 4_000, true, 1);
+        await scene('10k+labels/small', 10_000, 20_000, true, 1);
     },
     cases: [
         frame('frame, positions changed (10k/20k)', '10k', positionsChanged),
         frame('frame, positions changed (100k/200k)', '100k', positionsChanged),
         frame('frame, camera moved (100k/200k)', '100k', cameraMoved),
         frame('frame, labels on (2k/4k)', '2k+labels', cameraMoved),
+        frame('frame, labels on, small nodes (2k/4k)', '2k+labels/small', cameraMoved),
+        frame('frame, labels on, small nodes (10k/20k)', '10k+labels/small', cameraMoved),
     ],
 } satisfies BenchSuite;
