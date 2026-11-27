@@ -30,6 +30,15 @@ interface DragState {
 /** Movement (in canvas pixels) before a press counts as a drag */
 const DRAG_THRESHOLD = 3;
 
+/** Zoom speed per wheel pixel: one ~100px mouse notch ≈ 1.16× */
+const WHEEL_ZOOM_SPEED = 0.0015;
+
+/** Trackpad pinch (wheel + ctrlKey) sends much smaller deltas */
+const PINCH_WHEEL_BOOST = 8;
+
+/** Per-event zoom factor limits, against huge jumps */
+const MAX_WHEEL_FACTOR = 2;
+
 export class InteractionController {
     private canvas: HTMLCanvasElement;
     private graph: Graph;
@@ -406,10 +415,9 @@ export class InteractionController {
     private onPinch(): void {
         const dist = this.pinchDistance();
         if (this.lastPinchDist > 0) {
-            const delta = (dist - this.lastPinchDist) * 3; // sensitivity
             const [a, b] = [...this.pointers.values()];
-            // Zoom toward midpoint of two fingers
-            this.camera.zoom(delta, (a.x + b.x) / 2, (a.y + b.y) / 2);
+            // Zoom by the change in finger distance, toward their midpoint
+            this.camera.zoomBy(dist / this.lastPinchDist, (a.x + b.x) / 2, (a.y + b.y) / 2);
             this.emit('canvas:zoom', this.camera.getState());
         }
         this.lastPinchDist = dist;
@@ -480,8 +488,21 @@ export class InteractionController {
         if (!this.opts.zoom) return;
         e.preventDefault();
 
+        // Normalize to pixels (some mice report lines or pages)
+        let dy = e.deltaY;
+        if (e.deltaMode === 1) dy *= 16;
+        else if (e.deltaMode === 2) dy *= this.canvas.clientHeight || 800;
+        if (e.ctrlKey) dy *= PINCH_WHEEL_BOOST;
+
+        // Proportional to the scroll amount, so trackpads (many tiny
+        // events) and mouse wheels (few big ones) zoom at similar speeds
+        const factor = Math.min(
+            MAX_WHEEL_FACTOR,
+            Math.max(1 / MAX_WHEEL_FACTOR, Math.exp(-dy * WHEEL_ZOOM_SPEED)),
+        );
+
         const [sx, sy] = this.getCanvasCoords(e);
-        this.camera.zoom(-e.deltaY, sx, sy);
+        this.camera.zoomBy(factor, sx, sy);
         this.emit('canvas:zoom', this.camera.getState());
     }
 
