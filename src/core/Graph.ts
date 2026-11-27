@@ -31,6 +31,24 @@ function growBuffer<T extends Float32Array | Uint32Array>(
     return next;
 }
 
+/**
+ * Pop a reusable slot off a free list, or -1 if there is none.
+ * Entries go stale when the tail shrinks past them (and the slot
+ * may since have been reused sequentially), so skip any slot
+ * that is out of range or already active.
+ */
+function popFreeSlot(
+    free: number[],
+    tags: (string | undefined)[],
+    count: number,
+): number {
+    while (free.length > 0) {
+        const id = free.pop()!;
+        if (id < count && tags[id] === undefined) return id;
+    }
+    return -1;
+}
+
 // -----------------------------------------------------------
 // Graph
 // -----------------------------------------------------------
@@ -140,8 +158,9 @@ export class Graph {
     addNode(input: NodeInput): NodeId {
         let id: NodeId;
 
-        if (this.freeNodes.length > 0) {
-            id = this.freeNodes.pop()!;
+        const free = popFreeSlot(this.freeNodes, this.nodeTags, this.nodeCount);
+        if (free >= 0) {
+            id = free;
         } else {
             id = this.nodeCount;
             if (id >= this.nodeCapacity) {
@@ -214,11 +233,8 @@ export class Graph {
         while (this.nodeCount > 0 && this.nodeTags[this.nodeCount - 1] === undefined) {
             this.nodeCount--;
         }
-        // Remove any free-list entries that are now beyond nodeCount
-        // (they'll be naturally reassigned by addNode's sequential path)
-        if (this.freeNodes.length > 0) {
-            this.freeNodes = this.freeNodes.filter(fid => fid < this.nodeCount);
-        }
+        // Free-list entries beyond nodeCount are now stale; they are
+        // skipped lazily by popFreeSlot instead of filtered here (O(1))
 
         this.dirtyNodes = true;
     }
@@ -285,8 +301,9 @@ export class Graph {
     addEdge(input: EdgeInput): EdgeId {
         let id: EdgeId;
 
-        if (this.freeEdges.length > 0) {
-            id = this.freeEdges.pop()!;
+        const free = popFreeSlot(this.freeEdges, this.edgeTags, this.edgeCount);
+        if (free >= 0) {
+            id = free;
         } else {
             id = this.edgeCount;
             if (id >= this.edgeCapacity) {
@@ -357,9 +374,6 @@ export class Graph {
         // Shrink edgeCount if we deleted from the tail
         while (this.edgeCount > 0 && this.edgeTags[this.edgeCount - 1] === undefined) {
             this.edgeCount--;
-        }
-        if (this.freeEdges.length > 0) {
-            this.freeEdges = this.freeEdges.filter(fid => fid < this.edgeCount);
         }
 
         this.dirtyEdges = true;
