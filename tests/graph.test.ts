@@ -467,6 +467,57 @@ describe('Graph: queries', () => {
     });
 });
 
+describe('Graph: adjacency index', () => {
+    /** Reference: scan every edge */
+    const scan = (g: Graph, node: number) => {
+        const ids: number[] = [];
+        for (const id of g.activeEdgeIds()) {
+            if (g.edgeIndices[id * 2] === node || g.edgeIndices[id * 2 + 1] === node) ids.push(id);
+        }
+        return ids;
+    };
+
+    it('stays consistent through random adds and removals, before and after it is built', () => {
+        const g = new Graph();
+        const rand = seededRandom(11);
+        for (let i = 0; i < 200; i++) g.addNode({ tag: 'n' });
+
+        for (let round = 0; round < 6; round++) {
+            for (let i = 0; i < 300; i++) {
+                const a = Math.floor(rand() * 200), b = Math.floor(rand() * 200);
+                if (g.isNodeActive(a) && g.isNodeActive(b)) g.addEdge({ tag: 'e', source: a, target: b });
+            }
+            if (round % 2 === 1) {
+                // Querying builds the index; later rounds maintain it
+                for (let n = 0; n < 200; n += 13) expect(g.getNodeEdgeIds(n)).toEqual(scan(g, n));
+            }
+            for (let i = 0; i < 20; i++) g.removeNode(Math.floor(rand() * 200));
+            for (let i = 0; i < 30; i++) g.removeEdge(Math.floor(rand() * g.edgeSlots));
+            for (let i = 0; i < 20; i++) g.addNode({ tag: 'n' });
+        }
+        for (let n = 0; n < 200; n++) expect(g.getNodeEdgeIds(n)).toEqual(scan(g, n));
+    });
+
+    it('lists self-loops once', () => {
+        const g = new Graph();
+        const a = g.addNode({ tag: 'n' });
+        g.addEdge({ tag: 'loop', source: a, target: a });
+        expect(g.getNodeEdges(a)).toHaveLength(1);
+        expect(g.getRelatedNodes(a).map(n => n.id)).toEqual([a]);
+    });
+
+    it('removing a node after a bulk load removes exactly its edges', () => {
+        const g = new Graph();
+        for (let i = 0; i < 100; i++) g.addNode({ tag: 'n' });
+        for (let i = 0; i < 1000; i++) g.addEdge({ tag: 'e', source: i % 100, target: (i * 7 + 3) % 100 });
+        const before = g.numEdges;
+        const own = scan(g, 42).length;
+        g.removeNode(42);
+        expect(g.numEdges).toBe(before - own);
+        expect(scan(g, 42)).toEqual([]);
+    });
+});
+
 describe('Graph: lifecycle', () => {
     it('clears everything', () => {
         const g = new Graph();
