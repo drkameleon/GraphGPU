@@ -468,11 +468,44 @@ describe('InteractionController: edge events', () => {
         expect(edges).toHaveLength(1);
     });
 
-    it('does not pick edges when nobody listens', () => {
+    it('only picks edges on hover when someone listens', () => {
         const spy = vi.spyOn(controls, 'hitTestEdge');
         fire('pointermove', 550, 300);
+        expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('does not pick edges on click without selection or listeners', () => {
+        controls.setSelectionEnabled(false);
+        const spy = vi.spyOn(controls, 'hitTestEdge');
         click(550, 300);
         expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('selects edges: alone, toggled with shift, cleared on empty clicks', () => {
+        const log: string[] = [];
+        controls.on('edge:select', () => log.push('select'));
+        controls.on('edge:deselect', () => log.push('deselect'));
+        const c = graph.addNode({ tag: 'n', x: 0, y: -0.8 }); // screen (400, 540)
+        const e2 = graph.addEdge({ tag: 'down', source: a, target: c });
+
+        click(550, 300);
+        expect([...controls.getSelectedEdges()]).toEqual([0]);
+        click(400, 420); // the second edge, plain click: replaces
+        expect([...controls.getSelectedEdges()]).toEqual([e2]);
+        click(550, 300, { shiftKey: true }); // toggled in
+        expect([...controls.getSelectedEdges()].sort()).toEqual([0, e2]);
+        click(550, 300, { shiftKey: true }); // toggled out
+        expect([...controls.getSelectedEdges()]).toEqual([e2]);
+        click(250, 500); // empty: clears
+        expect(controls.getSelectedEdges().size).toBe(0);
+        expect(log).toEqual(['select', 'deselect', 'select', 'select', 'deselect', 'deselect']);
+    });
+
+    it('a plain node click deselects edges', () => {
+        click(550, 300);
+        expect(controls.getSelectedEdges().size).toBe(1);
+        click(700, 300);
+        expect(controls.getSelectedEdges().size).toBe(0);
     });
 });
 
