@@ -5,6 +5,25 @@
 import { GraphGPU } from 'graphgpu';
 import type { Node, NodeId } from 'graphgpu';
 
+// ============================================================
+// Stress test config (URL: ?nodes=100000&edges=300000&layout=gpu)
+// ============================================================
+
+const params = new URLSearchParams(window.location.search);
+
+function intParam(name: string, fallback: number, max: number): number {
+    const v = parseInt(params.get(name) ?? '', 10);
+    return Number.isFinite(v) && v > 0 ? Math.min(v, max) : fallback;
+}
+
+const STRESS_NODES = intParam('nodes', 500, 2_000_000);
+const STRESS = {
+    nodes: STRESS_NODES,
+    edges: intParam('edges', STRESS_NODES * 3, 10_000_000),
+    layout: params.get('layout') === 'gpu' ? 'gpu' as const : 'cpu' as const,
+    fromUrl: params.has('nodes') || params.has('edges'),
+};
+
 const { createApp, ref, reactive, computed, onMounted } = Vue;
 
 // ── Types ──
@@ -318,56 +337,43 @@ createApp({
         }
 
         // ── Stress Test ──
+        // Configurable via URL, e.g. ?nodes=100000&edges=300000&layout=gpu
 
-        function stressTest(): void {
+        async function stressTest(): Promise<void> {
             if (!g) return;
+            const { nodes: N, edges: E, layout } = STRESS;
 
-            // Stop current layout
-            if (layoutRunning.value) g.stopLayout();
+            g.stopLayout();
+            g.clear();
 
-            // Clear existing graph
-            const graph = g.getGraph();
-            for (const id of [...graph.activeNodeIds()]) {
-                g.unput(id);
-            }
+            // Smaller nodes (and no labels) for big graphs
+            const nodeSize = N > 5000 ? 2 : 4;
+            g.setNodeSize(nodeSize);
+            settingsModal.nodeSize = nodeSize;
+            g.setLabelsVisible(N <= 2000 && settingsModal.showLabels);
 
-            // Use smaller nodes for stress test
-            g.setNodeSize(4);
-            settingsModal.nodeSize = 4;
-
-            // Generate random graph: 500 nodes, ~1500 edges
-            const N = 500;
             const tags = ['alpha', 'beta', 'gamma', 'delta', 'epsilon'];
             const edgeTags = ['connects', 'links', 'references', 'depends'];
-            const nodeIds: number[] = [];
 
             for (let i = 0; i < N; i++) {
-                const tag = tags[Math.floor(Math.random() * tags.length)];
-                const id = g.put(tag, { name: `${tag}-${i}` });
-                nodeIds.push(id);
+                const tag = tags[i % tags.length];
+                g.put(tag, { name: `${tag}-${i}` });
+            }
+            for (let i = 0; i < E; i++) {
+                const src = Math.floor(Math.random() * N);
+                let tgt = Math.floor(Math.random() * N);
+                if (src === tgt) tgt = (src + 1) % N;
+                g.link(src, edgeTags[i % edgeTags.length], tgt);
             }
 
-            // Each node gets ~3 random edges on average
-            const numEdges = Math.floor(N * 3);
-            for (let i = 0; i < numEdges; i++) {
-                const src = nodeIds[Math.floor(Math.random() * N)];
-                let tgt = nodeIds[Math.floor(Math.random() * N)];
-                if (src === tgt) tgt = nodeIds[(nodeIds.indexOf(src) + 1) % N];
-                const tag = edgeTags[Math.floor(Math.random() * edgeTags.length)];
-                g.link(src, tag, tgt);
-            }
-
-            // Scatter positions randomly before layout
-            g.resetPositions();
-
-            // Light pre-stabilization (don't block for too long)
-            for (let i = 0; i < 50; i++) {
-                g.stepLayout(3);
+            // Light pre-stabilization for small graphs (it blocks)
+            if (layout === 'cpu' && N <= 2000) {
+                for (let i = 0; i < 50; i++) g.stepLayout(3);
             }
             g.fitView(0.15);
 
-            // Start layout and let it settle live
-            g.startLayout(getPhysicsOpts());
+            if (layout === 'gpu') await g.startGPULayout(getPhysicsOpts());
+            else g.startLayout(getPhysicsOpts());
             layoutRunning.value = true;
             setTimeout(() => g!.fitView(0.15), 500);
             setTimeout(() => g!.fitView(0.15), 2000);
@@ -376,15 +382,7 @@ createApp({
             refreshLegend();
 
             // Auto-enable FPS display
-            if (!settingsModal.showFps) {
-                settingsModal.showFps = true;
-                fpsInterval = window.setInterval(() => {
-                    if (!g) return;
-                    fpsDisplay.fps = g.getFps();
-                    fpsDisplay.nodes = g.nodeCount;
-                    fpsDisplay.edges = g.edgeCount;
-                }, 250);
-            }
+            if (!settingsModal.showFps) onToggleSetting('showFps');
         }
 
         // ── Init ──
@@ -416,6 +414,13 @@ createApp({
             graph.tagColors.setColor('country', '#6bcb77');
             graph.tagColors.setColor('book', '#4d96ff');
 
+            // ── Stress test straight from the URL (?nodes=&edges=&layout=) ──
+            if (STRESS.fromUrl) {
+                await stressTest();
+                bindEvents();
+                return;
+            }
+
             // ── Populate ──
             populateGraph(g);
 
@@ -433,6 +438,12 @@ createApp({
             setTimeout(() => g!.fitView(0.15), 800);
             updateCounts();
             refreshLegend();
+
+            bindEvents();
+        });
+
+        function bindEvents(): void {
+            if (!g) return;
 
             // ── Events ──
             g.on('node:hover', (e: { target: Node }) => {
@@ -468,6 +479,7 @@ createApp({
                 selectedNodeId.value = null;
             });
 
+            const canvas = document.getElementById('graph-canvas') as HTMLCanvasElement;
             canvas.addEventListener('mousemove', (e: MouseEvent) => {
                 tooltipStyle.value = {
                     left: `${e.clientX + 14}px`,
@@ -479,7 +491,7 @@ createApp({
 
             // Console access
             (window as any).g = g;
-        });
+        }
 
         return {
             darkMode, layoutRunning, animatedEnabled, activePalette,
