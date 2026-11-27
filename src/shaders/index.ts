@@ -108,7 +108,9 @@ fn fs_node(in: VSOut) -> @location(0) vec4f {
     finalColor = mix(finalColor, haloColor, ring * 0.95);
   }
 
-  return vec4f(finalColor * edge, in.color.a * edge);
+  // Straight (non-premultiplied) alpha: the blend multiplies by alpha,
+  // so the color must not be scaled by the edge factor as well
+  return vec4f(finalColor, in.color.a * edge);
 }
 `;
 
@@ -148,8 +150,9 @@ struct FrameUniforms {
 struct VSOut {
   @builtin(position) position: vec4f,
   @location(0) alpha: f32,
-  @location(1) vEdge: f32,
+  @location(1) vEdge: f32,                            // signed distance from the center line, in pixels
   @location(2) color: vec3f,
+  @location(3) @interpolate(flat) halfWidth: f32,     // line half-width, in pixels
 };
 
 fn applyCamera(pos: vec2f) -> vec2f {
@@ -184,6 +187,7 @@ fn vs_edge(
     out.alpha = 0.0;
     out.vEdge = 0.0;
     out.color = edgeColor;
+    out.halfWidth = 0.0;
     return out;
   }
 
@@ -204,6 +208,7 @@ fn vs_edge(
     out.alpha = 0.0;
     out.vEdge = 0.0;
     out.color = edgeColor;
+    out.halfWidth = 0.0;
     return out;
   }
 
@@ -220,21 +225,29 @@ fn vs_edge(
   let minWidth = 2.5 / frame.viewport.y;
   let w = max(minWidth, projectedNodeR * 1.0);
 
-  let pos = mix(srcProj, tgtProj, t) + ndcPerp * s * w;
+  // A perpendicular offset of 1 (in these units) spans viewport.y / 2
+  // pixels. Grow the quad by 1px so the antialiasing ramp fits outside.
+  let pxPerUnit = frame.viewport.y * 0.5;
+  let halfWidthPx = w * pxPerUnit;
+  let quadHalf = halfWidthPx + 1.0;
+
+  let pos = mix(srcProj, tgtProj, t) + ndcPerp * s * (quadHalf / pxPerUnit);
 
   out.position = vec4f(pos, 0.0, 1.0);
   out.alpha = frame.edgeOpacity;
-  out.vEdge = s;  // raw -1 to +1, interpolated across quad face
+  out.vEdge = s * quadHalf;
   out.color = edgeColor;
+  out.halfWidth = halfWidthPx;
   return out;
 }
 
 @fragment
 fn fs_edge(in: VSOut) -> @location(0) vec4f {
-  let d = abs(in.vEdge);  // 0 at center of edge, 1 at border
-  let aa = fwidth(d);
-  let edgeFade = smoothstep(1.0, 1.0 - aa * 3.0, d);
-  return vec4f(in.color, in.alpha * edgeFade);
+  // Coverage of this pixel by the line, with a 1px ramp at its border.
+  // Measured in pixels, so thin lines keep the same brightness wherever
+  // they fall relative to the pixel grid (no shimmering while moving).
+  let coverage = clamp(in.halfWidth + 0.5 - abs(in.vEdge), 0.0, 1.0);
+  return vec4f(in.color, in.alpha * coverage);
 }
 `;
 

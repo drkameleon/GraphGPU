@@ -59,6 +59,9 @@ export class GraphGPU {
 
         this.renderer.onFrame = (stats) => this.controls.emit('render:frame', stats);
 
+        // The GPU layout lives on the device: stop it if that's lost
+        this.renderer.onDeviceLost = () => this.stopGPULayout();
+
         // Controls
         this.controls = new InteractionController(
             this.canvas,

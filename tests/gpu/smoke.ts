@@ -141,9 +141,7 @@ check('first frame has no validation errors', initErr === null, initErr?.message
 
 // Edge midpoint is on the edge; node centers are the nodes
 const mid = await sample(0, 0);
-// Thin edges are dimmer when they straddle pixel rows (existing AA
-// behavior), so only require clearly-not-background here
-check('edge is drawn between its nodes', mid[1] > 20 && mid[0] < 20, fmt(mid));
+check('edge is drawn between its nodes', mid[1] > 150 && mid[0] < 30, fmt(mid));
 const nodeA = await sample(-0.6, 0);
 check('node is drawn with its color', nodeA[0] > 150 && nodeA[2] < 100, fmt(nodeA));
 const empty = await sample(0, 0.8);
@@ -160,7 +158,9 @@ renderer.renderFrame(32);
 const oldMid = await sample(0, 0);
 check('edge left its old position', isBackground(oldMid), fmt(oldMid));
 const newMid = await sample(0, 0.6);
-check('edge follows moved nodes', newMid[1] > 100, fmt(newMid));
+check('edge follows moved nodes', newMid[1] > 150, fmt(newMid));
+// Same thin line, different sub-pixel position: same brightness
+check('thin edges keep their brightness when moving', Math.abs(newMid[1] - mid[1]) < 40, `${mid[1]} vs ${newMid[1]}`);
 
 // -----------------------------------------------------------
 // Removing the edge hides it; adding many nodes/edges works

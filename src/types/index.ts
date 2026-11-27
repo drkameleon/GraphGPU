@@ -127,6 +127,15 @@ export interface GraphGPUOptions {
 
     /** Called when WebGPU is not available */
     onWebGPUUnavailable?: () => void;
+
+    /**
+     * Called when the GPU device is lost (driver reset, GPU switch...).
+     * The renderer then re-initializes itself on a new device.
+     */
+    onDeviceLost?: (info: { reason: string; message: string }) => void;
+
+    /** Track the canvas size automatically (ResizeObserver). Default: true */
+    autoResize?: boolean;
 }
 
 // -----------------------------------------------------------

@@ -30,9 +30,10 @@ export class Camera {
         height: number,
         zoomRange: [number, number] = [0.01, 100],
     ) {
-        this.canvasWidth = width;
-        this.canvasHeight = height;
-        this.aspectRatio = width / height;
+        this.canvasWidth = 1;
+        this.canvasHeight = 1;
+        this.aspectRatio = 1;
+        this.setSize(width, height);
         this.zoomMin = zoomRange[0];
         this.zoomMax = zoomRange[1];
         this.update();
@@ -40,10 +41,15 @@ export class Camera {
 
     /** Resize the viewport */
     resize(width: number, height: number): void {
-        this.canvasWidth = width;
-        this.canvasHeight = height;
-        this.aspectRatio = width / height;
+        this.setSize(width, height);
         this.dirty = true;
+    }
+
+    /** Zero-size canvases (hidden containers) must not break the math */
+    private setSize(width: number, height: number): void {
+        this.canvasWidth = width > 0 ? width : 1;
+        this.canvasHeight = height > 0 ? height : 1;
+        this.aspectRatio = this.canvasWidth / this.canvasHeight;
     }
 
     /** Pan by delta in screen pixels */

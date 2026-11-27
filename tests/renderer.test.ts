@@ -5,7 +5,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { GraphGPU } from '../src/index';
-import { gpu, installFakeWebGPU, installFakeFrames, flushFrames, pendingFrames, FakeBuffer } from './fake-gpu';
+import { gpu, installFakeWebGPU, installFakeFrames, flushFrames, pendingFrames, FakeBuffer, loseDevice } from './fake-gpu';
 
 let canvas: HTMLCanvasElement;
 let g: GraphGPU;
@@ -322,5 +322,93 @@ describe('Renderer: events', () => {
         expect(log[0]).toBe('start:true');
         expect(log.filter(e => e === 'tick').length).toBeGreaterThanOrEqual(2);
         expect(log.at(-1)).toBe('stop');
+    });
+});
+
+describe('Renderer: robustness', () => {
+    it('recovers from a lost device', async () => {
+        await flushFrames(1);
+        expect(gpu.devices).toHaveLength(1);
+
+        loseDevice('unknown');
+        await flushFrames(1);
+        expect(gpu.devices).toHaveLength(2);
+
+        // Everything gets re-uploaded to the new device and drawn
+        gpu.draws = [];
+        expect(await framesDrawn(1, () => g.requestRender())).toBe(1);
+        expect(gpu.draws).toEqual([[6, 9], [6, 10]]);
+        expect(gpu.errors).toEqual([]);
+    });
+
+    it('stops the GPU layout when the device is lost', async () => {
+        await flushFrames(1);
+        await g.startGPULayout({ maxIterations: 1000 });
+        await flushFrames(2);
+        loseDevice('unknown');
+        await flushFrames(3);
+        // Only the render loop is left
+        expect(pendingFrames()).toBe(1);
+        expect((g as unknown as { gpuLayout: unknown }).gpuLayout).toBeNull();
+    });
+
+    it('ignores its own destroy()', async () => {
+        await flushFrames(1);
+        g.destroy();
+        await flushFrames(1);
+        expect(gpu.devices).toHaveLength(1);
+    });
+
+    it('reports device loss through onDeviceLost', async () => {
+        const onDeviceLost = vi.fn();
+        const c = document.createElement('canvas');
+        document.body.appendChild(c);
+        installFakeWebGPU(c);
+        const other = new GraphGPU({ canvas: c, onDeviceLost });
+        await other.init();
+        loseDevice('unknown');
+        await flushFrames(1);
+        expect(onDeviceLost).toHaveBeenCalledWith(expect.objectContaining({ reason: 'unknown' }));
+        other.destroy();
+        c.remove();
+    });
+
+    it('survives a zero-size canvas', async () => {
+        const c = document.createElement('canvas');
+        document.body.appendChild(c);
+        installFakeWebGPU(c);
+        // happy-dom measures 0×0, like a hidden container
+        const other = new GraphGPU({ canvas: c, pixelRatio: 1 });
+        other.put('n', { name: 'a' });
+        expect(await other.init()).toBe(true);
+        expect(c.width).toBeGreaterThanOrEqual(1);
+        expect(c.height).toBeGreaterThanOrEqual(1);
+        const view = other.getView();
+        expect(Number.isFinite(view.zoom) && Number.isFinite(view.x)).toBe(true);
+        other.destroy();
+        c.remove();
+    });
+
+    it('follows canvas size changes automatically', async () => {
+        let observed: (() => void) | null = null;
+        vi.stubGlobal('ResizeObserver', class {
+            constructor(cb: () => void) { observed = cb; }
+            observe() {}
+            disconnect() {}
+        });
+        const c = document.createElement('canvas');
+        document.body.appendChild(c);
+        installFakeWebGPU(c);
+        const rect = { left: 0, top: 0, right: 300, bottom: 200, width: 300, height: 200, x: 0, y: 0, toJSON: () => ({}) };
+        vi.spyOn(c, 'getBoundingClientRect').mockImplementation(() => rect as DOMRect);
+        const other = new GraphGPU({ canvas: c, pixelRatio: 2 });
+        await other.init();
+        expect([c.width, c.height]).toEqual([600, 400]);
+
+        rect.width = 500; rect.height = 250;
+        observed!();
+        expect([c.width, c.height]).toEqual([1000, 500]);
+        other.destroy();
+        c.remove();
     });
 });
