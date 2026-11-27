@@ -239,3 +239,62 @@ describe('Renderer: GPU layout with shared positions', () => {
         g.stopGPULayout();
     });
 });
+
+describe('Renderer: node uploads', () => {
+    interface Internals {
+        renderer: { gpuPositions: FakeBuffer; gpuColors: FakeBuffer; gpuSizes: FakeBuffer; gpuSelection: FakeBuffer };
+    }
+    const bufs = () => (g as unknown as Internals).renderer;
+    const writesTo = (b: FakeBuffer) => gpu.writes.filter(w => w.buffer === b).length;
+    const snapshot = () => {
+        const r = bufs();
+        return [writesTo(r.gpuPositions), writesTo(r.gpuColors), writesTo(r.gpuSizes), writesTo(r.gpuSelection)];
+    };
+    const diff = (a: number[], b: number[]) => b.map((v, i) => v - a[i]);
+
+    it('only uploads positions when nodes move', async () => {
+        await flushFrames(1);
+        const before = snapshot();
+        g.getGraph().setNodePosition(1, 0.5, 0.5);
+        await flushFrames(1);
+        // positions, colors, sizes, selection
+        expect(diff(before, snapshot())).toEqual([1, 0, 0, 0]);
+
+        const mid = snapshot();
+        g.startLayout({ minVelocity: 0 });
+        await flushFrames(4);
+        g.stopLayout();
+        const after = diff(mid, snapshot());
+        expect(after[0]).toBeGreaterThan(0);
+        expect(after.slice(1)).toEqual([0, 0, 0]);
+    });
+
+    it('uploads colors and sizes when they change', async () => {
+        await flushFrames(1);
+        let before = snapshot();
+        g.getGraph().setNodeColor(2, [1, 0, 0, 1]);
+        await flushFrames(1);
+        expect(diff(before, snapshot()).slice(1, 3)).toEqual([1, 1]);
+
+        before = snapshot();
+        g.put('n', { name: 'new' });
+        await flushFrames(1);
+        expect(diff(before, snapshot()).slice(0, 3)).toEqual([1, 1, 1]);
+    });
+
+    it('only uploads selection when it changes', async () => {
+        await flushFrames(1);
+        const before = snapshot();
+        (g as unknown as { renderer: { setSelection(id: number, on: boolean): void } }).renderer.setSelection(1, true);
+        await flushFrames(1);
+        expect(diff(before, snapshot())).toEqual([0, 0, 0, 1]);
+    });
+
+    it('uploads everything after markDirty()', async () => {
+        await flushFrames(1);
+        const before = snapshot();
+        g.markDirty();
+        await flushFrames(1);
+        expect(diff(before, snapshot())).toEqual([1, 1, 1, 1]);
+    });
+});
