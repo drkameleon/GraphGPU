@@ -75,10 +75,21 @@ export class GPUForceLayout {
 
     // State
     private running = false;
+    private destroyed = false;
     private iteration = 0;
     private animationId = 0;
     private nodeCapacity = 0;
     private edgeCapacity = 0;
+
+    /** Bumped on every start/stop: async readbacks from an older run are dropped */
+    private generation = 0;
+    /** A readback is in flight (the buffer can only be mapped once) */
+    private mapping = false;
+
+    // What's currently on the GPU
+    private uploadedNodes = 0;
+    private uploadedEdges = 0;
+    private uploadedVersion = -1;
 
     constructor(device: GPUDevice, graph: Graph, opts?: Partial<GPUForceConfig>) {
         this.device = device;
@@ -136,8 +147,10 @@ export class GPUForceLayout {
     }
 
     private allocateBuffers(): void {
-        const nNodes = Math.max(this.graph.nodeSlots, 64);
-        const nEdges = Math.max(this.graph.edgeSlots, 64);
+        // Grow with headroom, so adding nodes one by one doesn't
+        // reallocate every time
+        const nNodes = Math.max(64, this.graph.nodeSlots * 2);
+        const nEdges = Math.max(64, this.graph.edgeSlots * 2);
 
         this.positionsBuffer?.destroy();
         this.velocitiesBuffer?.destroy();
@@ -202,14 +215,25 @@ export class GPUForceLayout {
         const zeros = new Float32Array(n * 2);
         this.device.queue.writeBuffer(this.velocitiesBuffer, 0, zeros);
         this.device.queue.writeBuffer(this.forcesBuffer, 0, zeros);
+
+        this.uploadedNodes = n;
+        this.uploadedEdges = e;
+        this.uploadedVersion = this.graph.structureVersion;
+    }
+
+    /** Re-upload if nodes/edges were added or removed since the last upload */
+    private syncWithGraph(): void {
+        if (this.uploadedVersion === this.graph.structureVersion) return;
+        this.uploadData();
+        this.uploadParams();
     }
 
     private uploadParams(): void {
         const buf = new ArrayBuffer(48);
         const u32 = new Uint32Array(buf);
         const f32 = new Float32Array(buf);
-        u32[0] = this.graph.nodeSlots;
-        u32[1] = this.graph.edgeSlots;
+        u32[0] = this.uploadedNodes;
+        u32[1] = this.uploadedEdges;
         f32[2] = this.config.gravitationalConstant;
         f32[3] = this.config.springLength;
         f32[4] = this.config.springConstant;
@@ -222,8 +246,8 @@ export class GPUForceLayout {
     }
 
     private dispatchStep(): void {
-        const n = this.graph.nodeSlots;
-        const e = this.graph.edgeSlots;
+        const n = this.uploadedNodes;
+        const e = this.uploadedEdges;
         const nodeGroups = Math.ceil(n / WORKGROUP_SIZE);
         const edgeGroups = Math.ceil(e / WORKGROUP_SIZE);
 
@@ -262,45 +286,74 @@ export class GPUForceLayout {
         this.device.queue.submit([encoder.finish()]);
     }
 
-    private async readbackPositions(): Promise<void> {
-        const n = this.graph.nodeSlots;
+    /**
+     * Copy positions back into the graph. Safe to race with stop(),
+     * start() and destroy(): a readback from an older run (or after
+     * destroy) is dropped instead of overwriting newer positions.
+     */
+    private async readbackPositions(generation: number): Promise<void> {
+        if (this.mapping || this.destroyed) return;
+
+        const n = this.uploadedNodes;
         const byteSize = n * 2 * 4;
+        if (byteSize === 0) return;
+
         const encoder = this.device.createCommandEncoder();
         encoder.copyBufferToBuffer(this.positionsBuffer, 0, this.readbackBuffer, 0, byteSize);
         this.device.queue.submit([encoder.finish()]);
-        await this.readbackBuffer.mapAsync(GPUMapMode.READ);
-        const data = new Float32Array(this.readbackBuffer.getMappedRange().slice(0));
-        this.readbackBuffer.unmap();
-        this.graph.positions.set(data.subarray(0, n * 2));
+
+        this.mapping = true;
+        let data: Float32Array;
+        try {
+            await this.readbackBuffer.mapAsync(GPUMapMode.READ, 0, byteSize);
+            if (this.destroyed) return;
+            data = new Float32Array(this.readbackBuffer.getMappedRange(0, byteSize).slice(0));
+            this.readbackBuffer.unmap();
+        } catch {
+            // Buffer destroyed (or device lost) while mapping
+            return;
+        } finally {
+            this.mapping = false;
+        }
+
+        if (generation !== this.generation) return;
+
+        // The graph may have changed size while we were waiting
+        const count = Math.min(n, this.graph.nodeSlots) * 2;
+        this.graph.positions.set(data.subarray(0, count));
         this.graph.dirtyNodes = true;
         this.graph.dirtyEdges = true;
     }
 
     async start(): Promise<void> {
-        if (this.running) return;
+        if (this.running || this.destroyed) return;
         this.running = true;
         this.iteration = 0;
+        const generation = ++this.generation;
         this.uploadData();
         this.uploadParams();
 
         const loop = async () => {
-            if (!this.running) return;
+            if (!this.running || generation !== this.generation) return;
+            this.syncWithGraph();
             for (let i = 0; i < this.config.stepsPerFrame; i++) {
                 this.dispatchStep();
                 this.iteration++;
             }
-            await this.readbackPositions();
-            if (this.iteration < this.config.maxIterations && this.running) {
-                this.animationId = requestAnimationFrame(() => loop());
+            await this.readbackPositions(generation);
+            if (!this.running || generation !== this.generation) return;
+            if (this.iteration < this.config.maxIterations) {
+                this.animationId = requestAnimationFrame(() => { loop(); });
             } else {
                 this.running = false;
             }
         };
-        loop();
+        await loop();
     }
 
     stop(): void {
         this.running = false;
+        this.generation++;
         if (this.animationId) {
             cancelAnimationFrame(this.animationId);
             this.animationId = 0;
@@ -308,15 +361,21 @@ export class GPUForceLayout {
     }
 
     async step(n: number): Promise<void> {
+        if (this.destroyed) return;
         this.uploadData();
         this.uploadParams();
         for (let i = 0; i < n; i++) {
             this.dispatchStep();
         }
-        await this.readbackPositions();
+        await this.readbackPositions(this.generation);
+    }
+
+    isRunning(): boolean {
+        return this.running;
     }
 
     destroy(): void {
+        this.destroyed = true;
         this.stop();
         this.positionsBuffer?.destroy();
         this.velocitiesBuffer?.destroy();

@@ -93,6 +93,13 @@ export class Graph {
     dirtyNodes: boolean = true;
     dirtyEdges: boolean = true;
 
+    /**
+     * Bumped whenever nodes/edges are added or removed (not on
+     * position/color changes), so consumers like the GPU layout
+     * know when to re-upload the graph structure.
+     */
+    structureVersion: number = 0;
+
     // --- Default node size ---
     private defaultNodeSize: number;
 
@@ -170,6 +177,7 @@ export class Graph {
 
         this.nodeCount = Math.max(this.nodeCount, id + 1);
         this.liveNodes++;
+        this.structureVersion++;
 
         // Position
         const px = input.x ?? (Math.random() - 0.5) * 2;
@@ -227,6 +235,7 @@ export class Graph {
 
         this.freeNodes.push(id);
         this.liveNodes--;
+        this.structureVersion++;
 
         // Shrink nodeCount if we deleted from the tail
         // This avoids iterating/uploading dead trailing slots
@@ -313,6 +322,7 @@ export class Graph {
 
         this.edgeCount = Math.max(this.edgeCount, id + 1);
         this.liveEdges++;
+        this.structureVersion++;
 
         this.edgeIndices[id * 2] = input.source;
         this.edgeIndices[id * 2 + 1] = input.target;
@@ -370,6 +380,7 @@ export class Graph {
 
         this.freeEdges.push(id);
         this.liveEdges--;
+        this.structureVersion++;
 
         // Shrink edgeCount if we deleted from the tail
         while (this.edgeCount > 0 && this.edgeTags[this.edgeCount - 1] === undefined) {
@@ -511,6 +522,7 @@ export class Graph {
         this.edgeCount = 0;
         this.liveNodes = 0;
         this.liveEdges = 0;
+        this.structureVersion++;
         this.freeNodes.length = 0;
         this.freeEdges.length = 0;
         this.positions.fill(0);
