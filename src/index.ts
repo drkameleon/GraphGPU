@@ -284,18 +284,29 @@ export class GraphGPU {
         attraction?: number;
         gravity?: number;
     }): void {
+        // Replace (not stack) any running layout, keeping animated mode
+        const wasAnimated = this.layout?.isAnimated() ?? false;
+        this.stopLayout();
+
         this.layout = new ForceLayout(this.graph, {
             type: 'force',
             ...opts,
         });
-        this.layout.start();
+
+        if (wasAnimated) {
+            this.layout.setAnimated(true);
+            this.controls.setAnimatedMode(true, this.layout);
+        } else {
+            this.layout.start();
+        }
     }
 
     /**
-     * Stop the current layout.
+     * Stop the current layout (CPU or GPU).
      */
     stopLayout(): void {
         this.layout?.stop();
+        this.stopGPULayout();
     }
 
     /**
@@ -528,6 +539,8 @@ export class GraphGPU {
                 ...this.options.layout,
             });
         }
+        // The CPU layout drives animated mode: don't run both
+        if (enabled) this.stopGPULayout();
         this.layout.setAnimated(enabled);
         this.controls.setAnimatedMode(enabled, this.layout);
     }
