@@ -53,3 +53,28 @@ jobs:
                   test -f dist/index.js || { echo "dist/index.js not found"; exit 1; }
                   test -f dist/index.d.ts || { echo "dist/index.d.ts not found"; exit 1; }
                   echo "Build output OK"
+
+    gpu:
+        name: GPU smoke test
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            # No GPU on the runners: Mesa's lavapipe is a software Vulkan
+            # driver, enough for Deno's WebGPU (wgpu) to run everything
+            - name: Install software Vulkan driver
+              run: |
+                  sudo apt-get update -q
+                  sudo apt-get install -y -q mesa-vulkan-drivers
+
+            - name: Setup Deno
+              uses: denoland/setup-deno@v2
+              with:
+                  deno-version: v2.x
+
+            - name: Run GPU smoke test
+              env:
+                  GPU_REQUIRED: 1
+              run: deno run --unstable-webgpu --unstable-sloppy-imports --allow-env --allow-read tests/gpu/smoke.ts
