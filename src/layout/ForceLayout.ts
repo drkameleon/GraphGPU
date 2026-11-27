@@ -59,6 +59,7 @@ export class ForceLayout {
     private forces: Float32Array;
     private running: boolean = false;
     private iteration: number = 0;
+    private frameId: number = 0;
 
     /** Barnes-Hut quadtree — reused across ticks (no re-allocation) */
     private quadTree: QuadTree;
@@ -164,13 +165,20 @@ export class ForceLayout {
                 }
             }
 
-            requestAnimationFrame(loop);
+            this.frameId = requestAnimationFrame(loop);
         };
 
-        requestAnimationFrame(loop);
+        this.frameId = requestAnimationFrame(loop);
     }
 
     stop(): void {
+        // Cancel the pending frame, so a quick stop() + start()
+        // can't leave two loops running
+        if (this.frameId) {
+            cancelAnimationFrame(this.frameId);
+            this.frameId = 0;
+        }
+        if (!this.running) return;
         this.running = false;
         this.onStop?.();
     }
