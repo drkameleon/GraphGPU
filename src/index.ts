@@ -57,6 +57,9 @@ export class GraphGPU {
         // Camera (temporary - renderer creates the real one)
         this.camera = this.renderer.getCamera();
 
+        // The GPU layout lives on the device: stop it if that's lost
+        this.renderer.onDeviceLost = () => this.stopGPULayout();
+
         // Controls
         this.controls = new InteractionController(
             this.canvas,
