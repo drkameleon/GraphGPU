@@ -20,6 +20,7 @@
 - [Features](#features)
 - [API Reference](#api-reference)
 - [Physics Engine](#physics-engine)
+- [Performance](#performance)
 - [Demo](#demo)
 - [Architecture](#architecture)
 - [Contributing](#contributing)
@@ -74,15 +75,17 @@ setTimeout(() => g.fitView(), 2000);
 ### Features
 
 - **WebGPU-native rendering** — instanced draw calls, MSAA, SDF circles for nodes, anti-aliased edge quads
+- **Render on demand** — frames are only drawn when something changes: an idle graph costs nothing
 - **Physics** — gravitational repulsion, Hooke spring edges, central gravity, viscous damping
-- **Dual layout engines** — CPU force layout with Barnes-Hut O(n log n) repulsion, GPU compute shaders for large graphs
+- **Dual layout engines** — CPU force layout with Barnes-Hut O(n log n) repulsion, GPU compute shaders for large graphs (writing straight into the render buffers, no per-frame copies)
 - **Animated mode** — live physics simulation with interactive drag (pinned nodes, elastic rebalancing)
 - **8 built-in palettes** — `default`, `vibrant`, `pastel`, `earthy`, `inferno`, `playful`, `viridis`, `rainbow`
-- **Full interactivity** — pan, zoom, drag, select, multi-select, hover
+- **Full interactivity** — pan, zoom, drag, select, multi-select, hover (mouse, touch & pen), node & edge events, spatially indexed picking
 - **Canvas2D label overlay** — auto-sizing, truncation, contrast-adaptive text color
 - **Contrast-adaptive selection halos** — lighter ring on dark backgrounds, darker on light, always the node's own color
 - **Tag-based coloring** — nodes and edges auto-color by tag, palette-switchable at runtime
 - **SoA data layout** — Structure-of-Arrays for cache-friendly access on large graphs
+- **Robust** — recovers from GPU device loss, follows canvas size changes automatically, works in hidden/zero-size containers
 
 ### API Reference
 
@@ -94,11 +97,14 @@ new GraphGPU({
     nodeSize?: number,          // default: 6
     edgeOpacity?: number,       // default: 0.12
     palette?: string | Palette, // default: 'default'
-    background?: [r,g,b,a],    // default: [0.03, 0.03, 0.05, 1]
+    background?: ColorInput,    // default: [0.02, 0.02, 0.04, 1]
     antialias?: boolean,        // default: true
     pixelRatio?: number,        // default: devicePixelRatio
-    maxNodes?: number,          // default: 10000
-    maxEdges?: number,          // default: 50000
+    maxNodes?: number,          // initial capacity (grows automatically), default: 4096
+    maxEdges?: number,          // initial capacity (grows automatically), default: 8192
+    autoResize?: boolean,       // follow canvas size changes, default: true
+    onWebGPUUnavailable?: () => void,
+    onDeviceLost?: (info) => void,  // the renderer recovers by itself
 })
 ```
 
@@ -118,14 +124,14 @@ new GraphGPU({
 | `startLayout(opts?)` | Start CPU force-directed layout |
 | `stopLayout()` | Stop the running layout |
 | `stepLayout(n?)` | Run N layout steps synchronously (useful for pre-stabilization) |
-| `startGPULayout(opts?)` | Start GPU compute layout (falls back to CPU if unavailable) |
+| `startGPULayout(opts?)` | Start GPU compute layout (falls back to CPU if unavailable); stops by itself once settled |
 | `stopGPULayout()` | Stop and destroy GPU layout resources |
 | `setAnimated(bool)` | Enable live physics mode (layout never auto-stops) |
 | `pinNode(nodeId)` | Pin a node (excluded from physics, position set manually) |
 | `unpinNode(nodeId)` | Unpin a node (rejoin physics simulation) |
 | `fitView(padding?)` | Fit camera to show all nodes |
 | `resetPositions()` | Randomize all node positions |
-| `resize()` | Handle container/window resize |
+| `resize()` | Re-read the canvas size (automatic unless `autoResize: false`) |
 
 #### Appearance
 
@@ -137,6 +143,8 @@ new GraphGPU({
 | `setEdgeOpacity(opacity)` | Change edge opacity at runtime |
 | `setLabelsVisible(bool)` | Show or hide all labels (node + edge) |
 | `getTagColors()` | Get current tag→color assignments |
+| `requestRender()` | Redraw after changes the library can't detect (e.g. editing raw buffers) |
+| `getFps()` | Frames drawn per second (0 while idle) |
 
 #### Interaction
 
@@ -149,7 +157,7 @@ new GraphGPU({
 
 #### Events
 
-`node:click` · `node:select` · `node:deselect` · `node:hover` · `node:hoverout` · `node:drag` · `node:dragstart` · `node:dragend` · `node:dblclick` · `canvas:click` · `canvas:pan` · `canvas:zoom`
+`node:click` · `node:select` · `node:deselect` · `node:hover` · `node:hoverout` · `node:drag` · `node:dragstart` · `node:dragend` · `node:dblclick` · `edge:click` · `edge:hover` · `edge:hoverout` · `canvas:click` · `canvas:pan` · `canvas:zoom`
 
 `layout:start` · `layout:tick` (`{ iteration, energy }`) · `layout:stop` · `render:frame` (render stats: `fps`, `frameTime`, `nodeCount`, `edgeCount`, ...)
 
@@ -192,7 +200,28 @@ g.startLayout({
 > ```
 
 > [!NOTE]
-> The CPU layout uses Barnes-Hut quadtree approximation for O(n log n) repulsion. For exact (but slower) O(n²) computation, set `barnesHutTheta: 0`. The GPU layout path runs the same physics model on compute shaders with O(n²/64) parallelism — no Barnes-Hut yet, but raw GPU throughput compensates for medium-sized graphs.
+> The CPU layout uses Barnes-Hut quadtree approximation for O(n log n) repulsion. For exact (but slower) O(n²) computation, set `barnesHutTheta: 0`. The GPU layout runs the same physics model on compute shaders: exact all-pairs repulsion tiled through workgroup memory, and race-free springs (every node sums its own, from a per-node edge list).
+
+### Performance
+
+What keeps it fast, frame after frame:
+
+- **Nothing is drawn unless something changed** (camera, graph, selection, settings)
+- **Edges never get re-uploaded when nodes move**: they're a static list of endpoint ids, and the edge shader reads node positions straight from the GPU buffer the nodes are drawn from
+- **Moving nodes only uploads positions** (8 bytes per node); colors, sizes and selection only when they change
+- **The GPU layout writes into that same buffer**: no per-frame copies between GPU and CPU, and frames never wait on the GPU (the CPU copy, for picking and labels, is refreshed in the background)
+- **Labels** are culled, measured once and overlap-tested through a spatial grid, with no per-frame allocations
+- **Picking** goes through a spatial grid, rebuilt only when nodes change
+- **Graph edits** are O(1) (removing a node: O(degree)); the adjacency index is built on demand
+
+Every PR is benchmarked against its base in CI (CPU-side costs, with a fake GPU device), and runs a smoke test on a real WebGPU implementation (shader compilation, validation, pixels, layout physics against a CPU reference). A few numbers from that CI, before → after:
+
+| | before | after |
+|---|---:|---:|
+| Frame after nodes moved (100k nodes / 200k edges) | 2.86 ms | 24 µs |
+| Label overlay (10k nodes / 20k edges) | 141 ms | 18 ms |
+| Removing 2k of 4k nodes | 85 ms | 1.1 ms |
+| 1000 hit tests (100k nodes) | 1.17 s | 14 ms |
 
 ### Demo
 
@@ -226,16 +255,20 @@ src/
     shaders/
         index.ts          # WGSL vertex/fragment/compute shaders
     interaction/
-        Controls.ts       # Mouse/touch/pinch input handling
+        Controls.ts       # Pointer input: pan, zoom, pinch, drag, picking, events
+        SpatialIndex.ts   # Uniform grid for node picking
     layout/
         ForceLayout.ts    # CPU force-directed layout (Barnes-Hut)
-        GPUForceLayout.ts # GPU compute force layout (5-pass pipeline)
+        GPUForceLayout.ts # GPU compute force layout (2 passes per step, shared buffers)
         QuadTree.ts       # Barnes-Hut quadtree for O(n log n) repulsion
     utils/
-        color.ts          # Color parsing (hex, rgb, hsl)
+        color.ts          # Color parsing (hex, rgb)
         palette.ts        # 8 built-in color palettes
     types/
         index.ts          # TypeScript type definitions
+tests/                    # Unit tests (vitest, happy-dom, fake GPU device)
+    gpu/smoke.ts          # Real-GPU smoke test (Deno WebGPU)
+bench/                    # Benchmarks (tinybench) + base-vs-head comparison
 ```
 
 ### Contributing
@@ -249,6 +282,7 @@ To run the test suite:
 npm install
 npm test            # single run
 npm run test:watch  # watch mode
+npm run test:gpu    # real-GPU smoke test (needs Deno)
 ```
 
 And the benchmarks:
