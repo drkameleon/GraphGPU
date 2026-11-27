@@ -490,10 +490,14 @@ export class Renderer implements PositionTarget {
     // =========================================================
 
     /** Render a single frame */
+    /** Called after every drawn frame */
+    onFrame?: (stats: RenderStats) => void;
+
     renderFrame(timestamp: number): RenderStats {
         if (!this.initialized) {
             return this.emptyStats();
         }
+        const startedAt = performance.now();
 
         this.needsRender = false;
         this.renderedFrames++;
@@ -610,14 +614,16 @@ export class Renderer implements PositionTarget {
             this.lastFpsTime = timestamp;
         }
 
-        return {
+        const stats: RenderStats = {
             fps: this.currentFps,
-            frameTime: 0,
+            frameTime: performance.now() - startedAt,
             nodeCount: this.graph.numNodes,
             edgeCount: this.graph.numEdges,
             visibleNodes: this.graph.numNodes,
             visibleEdges,
         };
+        this.onFrame?.(stats);
+        return stats;
     }
 
     /** Start the render loop */
