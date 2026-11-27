@@ -480,6 +480,8 @@ export class Graph {
         this.sizes.fill(0);
         this.edgeIndices.fill(0);
         this.edgeWeights.fill(0);
+        this.edgeColors.fill(0);
+        this.nodeAdj.clear();
         this.nodeTags.length = 0;
         this.nodeProperties.length = 0;
         this.edgeTags.length = 0;
