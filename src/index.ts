@@ -413,9 +413,12 @@ export class GraphGPU {
     // =========================================================
 
     /**
-     * Fit the view to show all nodes.
+     * Fit the view to show all nodes, or just the given ones.
+     *
+     * @example
+     *   g.fitView(0.1, g.getSelectedNodes());
      */
-    fitView(padding: number = 0.1): void {
+    fitView(padding: number = 0.1, nodes?: Iterable<NodeId>): void {
         let minX = Infinity, minY = Infinity;
         let maxX = -Infinity, maxY = -Infinity;
         const pos = this.graph.positions;
@@ -423,7 +426,8 @@ export class GraphGPU {
         // Nodes are drawn size × scale × 0.01 world units wide (radius)
         const radiusScale = this.renderer.getNodeScale() * 0.01;
 
-        for (const id of this.graph.activeNodeIds()) {
+        for (const id of nodes ?? this.graph.activeNodeIds()) {
+            if (!this.graph.isNodeActive(id)) continue;
             const x = pos[id * 2];
             const y = pos[id * 2 + 1];
             const r = sizes[id] * radiusScale;
@@ -435,6 +439,15 @@ export class GraphGPU {
 
         if (minX === Infinity) return; // no nodes
         this.camera.fitBounds(minX, minY, maxX, maxY, padding);
+    }
+
+    /**
+     * Center the view on a node, optionally zooming to `zoom`.
+     */
+    focusNode(id: NodeId, zoom?: number): void {
+        if (!this.graph.isNodeActive(id)) return;
+        this.camera.setPosition(this.graph.positions[id * 2], this.graph.positions[id * 2 + 1]);
+        if (zoom !== undefined) this.camera.setZoom(zoom);
     }
 
     /**

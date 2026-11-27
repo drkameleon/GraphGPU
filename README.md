@@ -130,7 +130,8 @@ new GraphGPU({
 | `setAnimated(bool)` | Enable live physics mode (layout never auto-stops) |
 | `pinNode(nodeId)` | Pin a node (excluded from physics, position set manually) |
 | `unpinNode(nodeId)` | Unpin a node (rejoin physics simulation) |
-| `fitView(padding?)` | Fit camera to show all nodes |
+| `fitView(padding?, nodes?)` | Fit camera to show all nodes (or just `nodes`, e.g. the selection) |
+| `focusNode(id, zoom?)` | Center the camera on a node, optionally zooming |
 | `resetPositions()` | Randomize all node positions |
 | `resize()` | Re-read the canvas size (automatic unless `autoResize: false`) |
 
