@@ -171,6 +171,28 @@ describe('ForceLayout: physics', () => {
         expect(g.dirtyEdges).toBe(true);
     });
 
+    it('handles nodes added after construction', () => {
+        const g = randomGraph(5, 5);
+        const layout = new ForceLayout(g, { type: 'force' });
+        for (let i = 0; i < 50; i++) g.addNode({ tag: 'late', x: i / 100, y: 0.3 });
+
+        expect(() => layout.step(5)).not.toThrow();
+        for (const v of g.positions.subarray(0, g.numNodes * 2)) {
+            expect(Number.isFinite(v)).toBe(true);
+        }
+    });
+
+    it('moves nodes added after construction', () => {
+        const g = new Graph();
+        g.addNode({ tag: 'n', x: 0, y: 0 });
+        const layout = new ForceLayout(g, { type: 'force' });
+        layout.step(1);
+
+        const late = g.addNode({ tag: 'n', x: 0.05, y: 0 });
+        layout.step(10);
+        expect(g.positions[late * 2]).toBeGreaterThan(0.05);
+    });
+
     it('supports the legacy option names without breaking', () => {
         const g = randomGraph(20, 20);
         const layout = new ForceLayout(g, { type: 'force', repulsion: 1, attraction: 1, gravity: 1 });
@@ -222,6 +244,21 @@ describe('ForceLayout: run loop', () => {
 
         flushFrames(20);
         expect(layout.isRunning()).toBe(true);
+        layout.stop();
+    });
+
+    it('keeps running when nodes are added in animated mode', () => {
+        const g = randomGraph(20, 30);
+        const layout = new ForceLayout(g, { type: 'force' });
+        layout.setAnimated(true);
+        flushFrames(2);
+
+        for (let i = 0; i < 100; i++) g.addNode({ tag: 'late', x: i / 200, y: -0.1 });
+        expect(() => flushFrames(5)).not.toThrow();
+        expect(layout.isRunning()).toBe(true);
+        for (const v of g.positions.subarray(0, g.numNodes * 2)) {
+            expect(Number.isFinite(v)).toBe(true);
+        }
         layout.stop();
     });
 });
