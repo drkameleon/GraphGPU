@@ -42,12 +42,26 @@ describe('Camera', () => {
         expect(sy).toBeCloseTo(320);
     });
 
-    it('pans horizontally in the drag direction', () => {
+    it('pans horizontally so the content follows the cursor', () => {
+        for (const [w, h] of [[800, 600], [600, 800], [1920, 400]]) {
+            const cam = new Camera(w, h);
+            cam.setZoom(1.7);
+            cam.update();
+            const before = cam.screenToWorld(w / 2, h / 2);
+            cam.pan(50, 0);
+            const [sx, sy] = cam.worldToScreen(before[0], before[1]);
+            expect(sx).toBeCloseTo(w / 2 + 50);
+            expect(sy).toBeCloseTo(h / 2);
+        }
+    });
+
+    it('pans diagonally so the content follows the cursor', () => {
         const cam = new Camera(W, H);
-        const before = cam.screenToWorld(400, 300);
-        cam.pan(50, 0);
-        const [sx] = cam.worldToScreen(before[0], before[1]);
-        expect(sx).toBeGreaterThan(400);
+        const before = cam.screenToWorld(100, 100);
+        cam.pan(-30, 45);
+        const [sx, sy] = cam.worldToScreen(before[0], before[1]);
+        expect(sx).toBeCloseTo(70);
+        expect(sy).toBeCloseTo(145);
     });
 
     it('zooms toward the cursor, keeping the point under it fixed', () => {
