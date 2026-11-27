@@ -152,6 +152,9 @@ new GraphGPU({
 | Method | Description |
 |--------|-------------|
 | `setSelectionEnabled(bool)` | Toggle node selection |
+| `selectNodes(ids, additive?)` / `selectEdges(ids, additive?)` | Select from code (replaces the selection unless `additive`); fires the usual select events |
+| `deselect(nodes?, edges?)` / `clearSelection()` | Deselect some / everything |
+| `getSelectedNodes()` / `getSelectedEdges()` | Ids of the current selection |
 | `setMultiSelectEnabled(bool)` | Toggle always-on multi-select |
 | `interaction: { lasso: true }` | Box selection: shift-drag on empty canvas selects the nodes inside |
 | `on(event, handler)` | Listen for events |

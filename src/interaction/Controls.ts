@@ -180,6 +180,67 @@ export class InteractionController {
     }
 
     /**
+     * Select nodes, replacing the selection (nodes and edges) or adding
+     * to it. Fires node:select / node:deselect as clicks do.
+     */
+    selectNodes(ids: Iterable<NodeId>, additive: boolean = false): void {
+        const wanted = new Set<NodeId>();
+        for (const id of ids) if (this.graph.isNodeActive(id)) wanted.add(id);
+        if (!additive) {
+            this.deselectEdges();
+            for (const id of [...this.selectedNodes]) {
+                if (wanted.has(id)) continue;
+                this.selectedNodes.delete(id);
+                this.emit('node:deselect', this.graph.getNode(id));
+            }
+        }
+        for (const id of wanted) {
+            if (this.selectedNodes.has(id)) continue;
+            this.selectedNodes.add(id);
+            this.emit('node:select', this.graph.getNode(id));
+        }
+    }
+
+    /** Select edges, replacing the selection or adding to it */
+    selectEdges(ids: Iterable<EdgeId>, additive: boolean = false): void {
+        const wanted = new Set<EdgeId>();
+        for (const id of ids) if (this.graph.isEdgeActive(id)) wanted.add(id);
+        if (!additive) {
+            this.deselectNodes([...this.selectedNodes]);
+            for (const id of [...this.selectedEdges]) {
+                if (wanted.has(id)) continue;
+                this.selectedEdges.delete(id);
+                this.emit('edge:deselect', this.graph.getEdge(id) ?? { id });
+            }
+        }
+        for (const id of wanted) {
+            if (this.selectedEdges.has(id)) continue;
+            this.selectedEdges.add(id);
+            this.emit('edge:select', this.graph.getEdge(id));
+        }
+    }
+
+    /** Remove nodes from the selection */
+    deselectNodes(ids: Iterable<NodeId>): void {
+        for (const id of ids) {
+            if (this.selectedNodes.delete(id)) this.emit('node:deselect', this.graph.getNode(id));
+        }
+    }
+
+    /** Remove edges from the selection */
+    deselectEdgeIds(ids: Iterable<EdgeId>): void {
+        for (const id of ids) {
+            if (this.selectedEdges.delete(id)) this.emit('edge:deselect', this.graph.getEdge(id) ?? { id });
+        }
+    }
+
+    /** Deselect everything */
+    clearSelection(): void {
+        this.deselectNodes([...this.selectedNodes]);
+        this.deselectEdges();
+    }
+
+    /**
      * Drop nodes/edges that are about to be removed from the graph:
      * deselect them (with events), stop hovering or dragging them.
      * Call before removing, while they can still be looked up.
@@ -593,7 +654,7 @@ export class InteractionController {
         }
     }
 
-    private deselectEdges(e: Event): void {
+    private deselectEdges(e?: Event): void {
         for (const edge of [...this.selectedEdges]) {
             this.selectedEdges.delete(edge);
             this.emit('edge:deselect', this.graph.getEdge(edge) ?? { id: edge }, e);

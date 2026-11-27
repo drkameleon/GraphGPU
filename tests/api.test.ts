@@ -121,40 +121,76 @@ describe('GraphGPU: layout lifecycle', () => {
     });
 });
 
-describe('GraphGPU: removing selected items', () => {
-    const internals = () => g as unknown as {
-        controls: { getSelectedNodes(): Set<number>; getSelectedEdges(): Set<number>; emit(t: string, n: unknown): void };
-        renderer: { selectionData: Float32Array };
-    };
+describe('GraphGPU: selection', () => {
+    const selectionData = () => (g as unknown as { renderer: { selectionData: Float32Array } }).renderer.selectionData;
 
-    function selectNode(id: number) {
-        // As a click would
-        const c = internals().controls as unknown as { selectedNodes: Set<number> };
-        c.selectedNodes.add(id);
-        (g as unknown as { renderer: { setSelection(id: number, s: boolean): void } }).renderer.setSelection(id, true);
-    }
+    it('selects nodes from code, replacing the selection', () => {
+        const log: string[] = [];
+        g.on('node:select', (e) => log.push(`+${(e.target as { id: number }).id}`));
+        g.on('node:deselect', (e) => log.push(`-${(e.target as { id: number }).id}`));
+        g.selectNodes([1, 2]);
+        g.selectNodes(3);
+        expect(log).toEqual(['+1', '+2', '-1', '-2', '+3']);
+        expect(g.getSelectedNodes()).toEqual([3]);
+        expect(selectionData()[3]).toBe(1);
+        expect(selectionData()[1]).toBe(0);
+    });
+
+    it('adds to the selection with additive', () => {
+        g.selectNodes(1);
+        g.selectNodes([2, 1], true);
+        expect(g.getSelectedNodes().sort()).toEqual([1, 2]);
+    });
+
+    it('ignores ids that aren\'t in the graph', () => {
+        g.selectNodes([1, 999, -1]);
+        g.selectEdges([0, 999]);
+        expect(g.getSelectedEdges()).toEqual([0]);
+        g.selectNodes([1, 999], true);
+        expect(g.getSelectedNodes()).toEqual([1]);
+    });
+
+    it('selects edges, replacing selected nodes too', () => {
+        g.selectNodes(1);
+        g.selectEdges([0, 1]);
+        expect(g.getSelectedNodes()).toEqual([]);
+        expect(g.getSelectedEdges()).toEqual([0, 1]);
+        g.selectNodes(4);
+        expect(g.getSelectedEdges()).toEqual([]);
+    });
+
+    it('deselects some or everything', () => {
+        g.selectNodes([1, 2, 3]);
+        g.selectEdges([0, 1], true);
+        g.deselect([2], [1]);
+        expect(g.getSelectedNodes()).toEqual([1, 3]);
+        expect(g.getSelectedEdges()).toEqual([0]);
+        g.clearSelection();
+        expect(g.getSelectedNodes()).toEqual([]);
+        expect(g.getSelectedEdges()).toEqual([]);
+        expect(Array.from(selectionData()).every((v) => v === 0)).toBe(true);
+    });
 
     it('doesn\'t leave a removed node selected for the next one in its slot', () => {
-        selectNode(5);
+        g.selectNodes(5);
         const deselected = vi.fn();
         g.on('node:deselect', deselected);
         g.unput(5);
         expect(deselected).toHaveBeenCalledTimes(1);
-        expect(internals().controls.getSelectedNodes().has(5)).toBe(false);
-        expect(internals().renderer.selectionData[5]).toBe(0);
+        expect(g.getSelectedNodes()).toEqual([]);
+        expect(selectionData()[5]).toBe(0);
 
         // The slot gets reused: the new node isn't selected
         const id = g.put('n', { name: 'new' });
         expect(id).toBe(5);
-        expect(internals().controls.getSelectedNodes().has(id)).toBe(false);
+        expect(g.getSelectedNodes()).toEqual([]);
     });
 
     it('drops the selection on clear()', () => {
-        selectNode(1);
-        selectNode(2);
+        g.selectNodes([1, 2]);
         g.clear();
-        expect(internals().controls.getSelectedNodes().size).toBe(0);
-        expect(Array.from(internals().renderer.selectionData).every((v) => v === 0)).toBe(true);
+        expect(g.getSelectedNodes()).toEqual([]);
+        expect(Array.from(selectionData()).every((v) => v === 0)).toBe(true);
     });
 });
 

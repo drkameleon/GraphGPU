@@ -74,21 +74,6 @@ export class GraphGPU {
             options.nodeSize,
         );
         if (options.edgeWidth) this.controls.setEdgeWidth(options.edgeWidth);
-    }
-
-    // =========================================================
-    // Initialization
-    // =========================================================
-
-    /** Initialize WebGPU and start rendering. Must be awaited. */
-    async init(): Promise<boolean> {
-        const ok = await this.renderer.init();
-        if (!ok) return false;
-
-        this.camera = this.renderer.getCamera();
-
-        // Initialize label overlay
-        this.renderer.initLabelOverlay();
 
         // Wire selection → renderer
         this.controls.on('node:select', (e) => {
@@ -110,6 +95,21 @@ export class GraphGPU {
             const edge = e.target as { id: number } | null;
             if (edge) this.renderer.setEdgeSelection(edge.id, false);
         });
+    }
+
+    // =========================================================
+    // Initialization
+    // =========================================================
+
+    /** Initialize WebGPU and start rendering. Must be awaited. */
+    async init(): Promise<boolean> {
+        const ok = await this.renderer.init();
+        if (!ok) return false;
+
+        this.camera = this.renderer.getCamera();
+
+        // Initialize label overlay
+        this.renderer.initLabelOverlay();
 
         // Start render loop
         this.renderer.start();
@@ -583,6 +583,40 @@ export class GraphGPU {
             this.renderer.clearSelection();
             this.renderer.clearEdgeSelection();
         }
+    }
+
+    /**
+     * Select nodes (replacing the selection, or adding to it with
+     * `additive`). Fires `node:select` / `node:deselect` like clicks.
+     */
+    selectNodes(ids: NodeId | NodeId[], additive: boolean = false): void {
+        this.controls.selectNodes(Array.isArray(ids) ? ids : [ids], additive);
+    }
+
+    /** Select edges (replacing the selection, or adding to it) */
+    selectEdges(ids: EdgeId | EdgeId[], additive: boolean = false): void {
+        this.controls.selectEdges(Array.isArray(ids) ? ids : [ids], additive);
+    }
+
+    /** Remove nodes and/or edges from the selection */
+    deselect(nodes: NodeId[] = [], edges: EdgeId[] = []): void {
+        this.controls.deselectNodes(nodes);
+        this.controls.deselectEdgeIds(edges);
+    }
+
+    /** Deselect everything */
+    clearSelection(): void {
+        this.controls.clearSelection();
+    }
+
+    /** Ids of the selected nodes */
+    getSelectedNodes(): NodeId[] {
+        return [...this.controls.getSelectedNodes()];
+    }
+
+    /** Ids of the selected edges */
+    getSelectedEdges(): EdgeId[] {
+        return [...this.controls.getSelectedEdges()];
     }
 
     /**
