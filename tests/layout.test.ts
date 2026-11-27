@@ -11,23 +11,25 @@ import { randomGraph, nodeDistance } from './helpers';
 // Manual requestAnimationFrame, so loops can be stepped
 // -----------------------------------------------------------
 
-let frames: FrameRequestCallback[] = [];
+let frames = new Map<number, FrameRequestCallback>();
+let nextFrameId = 1;
 
 function flushFrames(count: number): void {
-    for (let i = 0; i < count && frames.length > 0; i++) {
-        const pending = frames;
-        frames = [];
+    for (let i = 0; i < count && frames.size > 0; i++) {
+        const pending = [...frames.values()];
+        frames = new Map();
         for (const cb of pending) cb(0);
     }
 }
 
 beforeEach(() => {
-    frames = [];
+    frames = new Map();
     vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
-        frames.push(cb);
-        return frames.length;
+        const id = nextFrameId++;
+        frames.set(id, cb);
+        return id;
     });
-    vi.stubGlobal('cancelAnimationFrame', () => {});
+    vi.stubGlobal('cancelAnimationFrame', (id: number) => { frames.delete(id); });
 });
 
 afterEach(() => {
@@ -225,6 +227,34 @@ describe('ForceLayout: run loop', () => {
 
         flushFrames(3);
         expect(onTick).toHaveBeenCalledTimes(3);
+    });
+
+    it('runs a single loop after a quick stop + start', () => {
+        const g = randomGraph(20, 20);
+        const layout = new ForceLayout(g, { type: 'force', minVelocity: 0 });
+        const onTick = vi.fn();
+        layout.onTick = onTick;
+
+        layout.start();
+        layout.stop();
+        layout.start();
+        flushFrames(5);
+        expect(onTick).toHaveBeenCalledTimes(5);
+        expect(frames.size).toBe(1);
+        layout.stop();
+        expect(frames.size).toBe(0);
+    });
+
+    it('only reports stop when it was running', () => {
+        const layout = new ForceLayout(randomGraph(5, 5), { type: 'force' });
+        const onStop = vi.fn();
+        layout.onStop = onStop;
+        layout.stop();
+        expect(onStop).not.toHaveBeenCalled();
+        layout.start();
+        layout.stop();
+        layout.stop();
+        expect(onStop).toHaveBeenCalledTimes(1);
     });
 
     it('auto-stops at maxIterations', () => {
