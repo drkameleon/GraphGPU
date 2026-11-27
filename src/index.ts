@@ -479,6 +479,7 @@ export class GraphGPU {
      */
     setNodeSize(size: number): void {
         this.renderer.setNodeScale(size);
+        this.controls.setNodeScale(size);
     }
 
     /**
