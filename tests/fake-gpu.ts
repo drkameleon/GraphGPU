@@ -4,11 +4,11 @@
 
 import { vi } from 'vitest';
 import {
-    fakeDevice, resetGPU,
+    resetGPU,
     WEBGPU_GLOBALS, fakeNavigatorGPU, fakeWebGPUContext,
 } from './fake-device';
 
-export { gpu, fakeDevice, releaseMaps, FakeBuffer } from './fake-device';
+export { gpu, fakeDevice, releaseMaps, FakeBuffer, loseDevice } from './fake-device';
 
 /**
  * Install WebGPU globals, a fake `navigator.gpu` and a fake
@@ -19,7 +19,7 @@ export function installFakeWebGPU(canvas?: HTMLCanvasElement): void {
     for (const [name, value] of Object.entries(WEBGPU_GLOBALS)) vi.stubGlobal(name, value);
 
     if (canvas) {
-        vi.stubGlobal('navigator', { ...globalThis.navigator, gpu: fakeNavigatorGPU(fakeDevice()) });
+        vi.stubGlobal('navigator', { ...globalThis.navigator, gpu: fakeNavigatorGPU() });
         const context = fakeWebGPUContext();
         // An own property (not vi.spyOn), so it composes with spies
         // on the prototype instead of replacing them

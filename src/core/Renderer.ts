@@ -83,6 +83,8 @@ export class Renderer implements PositionTarget {
 
     // State
     private initialized: boolean = false;
+    private destroyed: boolean = false;
+    private resizeObserver: ResizeObserver | null = null;
     private animationId: number = 0;
     private labelsVisible: boolean = true;
 
@@ -125,18 +127,35 @@ export class Renderer implements PositionTarget {
 
     /** Initialize WebGPU - must be called before rendering */
     async init(): Promise<boolean> {
+        const ok = await this.setupDevice();
+        if (ok && this.options.autoResize !== false && typeof ResizeObserver !== 'undefined') {
+            this.resizeObserver = new ResizeObserver(() => this.resizeCanvas());
+            this.resizeObserver.observe(this.canvas);
+        }
+        return ok;
+    }
+
+    /** Request a device and create every GPU resource on it */
+    private async setupDevice(): Promise<boolean> {
         if (!navigator.gpu) {
             this.options.onWebGPUUnavailable?.();
             return false;
         }
 
         const adapter = await navigator.gpu.requestAdapter();
-        if (!adapter) {
-            this.options.onWebGPUUnavailable?.();
+        if (!adapter || this.destroyed) {
+            if (!adapter) this.options.onWebGPUUnavailable?.();
             return false;
         }
 
-        this.device = await adapter.requestDevice();
+        const device = await adapter.requestDevice();
+        if (this.destroyed) {
+            device.destroy();
+            return false;
+        }
+        this.device = device;
+        device.lost?.then((info) => this.handleDeviceLost(device, info));
+
         this.context = this.canvas.getContext('webgpu') as GPUCanvasContext;
         this.format = navigator.gpu.getPreferredCanvasFormat();
 
@@ -146,12 +165,47 @@ export class Renderer implements PositionTarget {
             alphaMode: 'opaque',
         });
 
-        this.resizeCanvas();
+        this.resizeCanvas(true);
         this.createPipelines();
         this.allocateBuffers();
 
         this.initialized = true;
+        this.invalidate();
         return true;
+    }
+
+    /** Called (by the owner) right before recovering from a lost device */
+    onDeviceLost?: () => void;
+
+    /**
+     * The device was lost (driver reset, GPU switch, ...): everything on
+     * it is gone, but the CPU still has the whole graph. Start over on
+     * a new device and re-upload.
+     */
+    private async handleDeviceLost(device: GPUDevice, info: GPUDeviceLostInfo): Promise<void> {
+        if (this.destroyed || device !== this.device || info.reason === 'destroyed') return;
+
+        this.initialized = false;
+        this.options.onDeviceLost?.({ reason: String(info.reason), message: info.message });
+        this.onDeviceLost?.();
+
+        // Forget all GPU-side state
+        if (this.externalPositions) {
+            this.externalPositions = false;
+            this.graph.trackPositionEdits(false);
+        }
+        this.msaaTexture = null;
+        this.gpuNodeCapacity = 0;
+        this.gpuEdgeCapacity = 0;
+        this.uploadedStructure = -1;
+        this.uploadedEdgeColors = -1;
+        this.drawnEdges = 0;
+        this.visibleEdges = 0;
+        this.graph.dirtyNodes = true;
+        this.graph.dirtyNodeAttributes = true;
+        this.selectionDirty = true;
+
+        await this.setupDevice();
     }
 
     /** Get the camera for external manipulation */
@@ -160,14 +214,21 @@ export class Renderer implements PositionTarget {
     }
 
     /** Resize canvas to match container */
-    resizeCanvas(): void {
+    resizeCanvas(force: boolean = false): void {
         this.invalidate();
         const rect = this.canvas.getBoundingClientRect();
-        this.canvas.width = rect.width * this.pixelRatio;
-        this.canvas.height = rect.height * this.pixelRatio;
-        this.camera.resize(this.canvas.width, this.canvas.height);
+        // At least 1px: hidden containers measure 0, and zero-size
+        // textures are invalid
+        const width = Math.max(1, Math.round(rect.width * this.pixelRatio));
+        const height = Math.max(1, Math.round(rect.height * this.pixelRatio));
+        const changed = width !== this.canvas.width || height !== this.canvas.height;
+        if (changed) {
+            this.canvas.width = width;
+            this.canvas.height = height;
+        }
+        this.camera.resize(width, height);
 
-        if (this.antialias && this.device) {
+        if (this.antialias && this.device && (changed || force || !this.msaaTexture)) {
             this.msaaTexture?.destroy();
             this.msaaTexture = this.device.createTexture({
                 size: { width: this.canvas.width, height: this.canvas.height },
@@ -1107,6 +1168,9 @@ export class Renderer implements PositionTarget {
 
     /** Clean up all GPU resources */
     destroy(): void {
+        this.destroyed = true;
+        this.resizeObserver?.disconnect();
+        this.resizeObserver = null;
         this.stop();
         if (typeof document !== 'undefined') {
             document.fonts?.removeEventListener?.('loadingdone', this.onFontsLoaded);
