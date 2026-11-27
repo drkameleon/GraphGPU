@@ -75,3 +75,11 @@ describe('GraphGPU: layout lifecycle', () => {
         g.stopLayout();
     });
 });
+
+describe('GraphGPU: palette', () => {
+    it('keeps explicit node colors when switching palettes', () => {
+        const red = g.put('custom', 'Red', {}, { color: '#ff0000' });
+        g.setPalette('vibrant');
+        expect(Array.from(g.colors.subarray(red * 4, red * 4 + 3))).toEqual([1, 0, 0]);
+    });
+});
