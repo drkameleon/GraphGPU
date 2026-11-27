@@ -205,7 +205,7 @@ export class Graph {
 
     /** Get a node view (allocates - use sparingly in hot paths) */
     getNode(id: NodeId): Node | null {
-        if (id < 0 || id >= this.nodeCount || !this.nodeTags[id]) return null;
+        if (id < 0 || id >= this.nodeCount || this.nodeTags[id] === undefined) return null;
         return {
             id,
             tag: this.nodeTags[id],
@@ -376,7 +376,7 @@ export class Graph {
 
     /** Get an edge view */
     getEdge(id: EdgeId): Edge | null {
-        if (id < 0 || id >= this.edgeCount || !this.edgeTags[id]) return null;
+        if (id < 0 || id >= this.edgeCount || this.edgeTags[id] === undefined) return null;
         return {
             id,
             tag: this.edgeTags[id],
@@ -450,7 +450,7 @@ export class Graph {
     getAllTags(): string[] {
         const tags = new Set<string>();
         for (let i = 0; i < this.nodeCount; i++) {
-            if (this.nodeTags[i]) tags.add(this.nodeTags[i]);
+            if (this.nodeTags[i] !== undefined) tags.add(this.nodeTags[i]);
         }
         return [...tags];
     }
