@@ -13,6 +13,8 @@ export interface BenchCase {
 
 export interface BenchSuite {
     name: string;
+    /** Runs once before the suite (e.g. async initialization) */
+    setup?: () => Promise<void> | void;
     cases: BenchCase[];
 }
 

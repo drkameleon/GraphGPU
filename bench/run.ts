@@ -15,8 +15,9 @@ import { formatMs } from './utils';
 import graph from './graph';
 import quadtree from './quadtree';
 import layout from './layout';
+import renderer from './renderer';
 
-const SUITES: BenchSuite[] = [graph, quadtree, layout];
+const SUITES: BenchSuite[] = [graph, quadtree, layout, renderer];
 
 // -----------------------------------------------------------
 // CLI options
@@ -53,6 +54,8 @@ async function main(): Promise<void> {
             !filter || `${suite.name} › ${c.name}`.toLowerCase().includes(filter),
         );
         if (cases.length === 0) continue;
+
+        await suite.setup?.();
 
         const bench = new Bench({
             name: suite.name,
