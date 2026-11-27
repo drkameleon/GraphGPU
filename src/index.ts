@@ -352,6 +352,7 @@ export class GraphGPU {
         maxVelocity?: number;
         stepsPerFrame?: number;
         maxIterations?: number;
+        approximateRepulsion?: boolean | 'auto';
     }): Promise<void> {
         // Stop any running layout
         this.stopLayout();
