@@ -262,3 +262,53 @@ describe('InteractionController: lifecycle', () => {
         expect(log).toEqual([]);
     });
 });
+
+// -----------------------------------------------------------
+// Coordinate scale & node size
+// -----------------------------------------------------------
+
+describe('InteractionController: hit testing scale', () => {
+    function layoutCanvas(cssW: number, cssH: number, pixelW: number, pixelH: number): void {
+        canvas.width = pixelW;
+        canvas.height = pixelH;
+        camera.resize(pixelW, pixelH);
+        vi.spyOn(canvas, 'getBoundingClientRect').mockReturnValue({
+            left: 0, top: 0, right: cssW, bottom: cssH,
+            width: cssW, height: cssH, x: 0, y: 0,
+            toJSON: () => ({}),
+        } as DOMRect);
+    }
+
+    it('maps CSS pixels to canvas pixels using the canvas size, not devicePixelRatio', () => {
+        // Rendered at 2x while the window reports 1x (e.g. options.pixelRatio = 2)
+        layoutCanvas(400, 300, 800, 600);
+        const log = record('node:select');
+
+        // Node b sits at canvas pixel (700, 300) → CSS pixel (350, 150)
+        click(350, 150);
+        expect(log).toEqual(['node:select']);
+        expect([...controls.getSelectedNodes()]).toEqual([b]);
+    });
+
+    it('pans by the right amount on a high-density canvas', () => {
+        layoutCanvas(400, 300, 800, 600);
+        fire('pointerdown', 20, 20);
+        fire('pointermove', 70, 20);
+        fire('pointerup', 70, 20);
+        // 50 CSS px = 100 canvas px
+        const [sx] = camera.worldToScreen(0, 0);
+        expect(sx).toBeCloseTo(500);
+    });
+
+    it('uses the current node scale for hit testing', () => {
+        // ~60px from node a: inside the default radius (~130px)
+        click(460, 300);
+        expect([...controls.getSelectedNodes()]).toEqual([a]);
+
+        // Shrink nodes: radius ~22px, now it's a miss
+        controls.setNodeScale(1);
+        const log = record('canvas:click');
+        click(460, 300);
+        expect(log).toEqual(['canvas:click']);
+    });
+});

@@ -170,6 +170,11 @@ export class InteractionController {
         this.animatedLayout = layout;
     }
 
+    /** Update node scale (must match the renderer's, for hit testing) */
+    setNodeScale(scale: number): void {
+        this.nodeScale = scale;
+    }
+
     /** Get currently hovered node */
     getHoveredNode(): NodeId | null {
         return this.hoveredNode;
@@ -212,12 +217,18 @@ export class InteractionController {
     // Pointer handlers
     // =========================================================
 
+    /**
+     * Event position in canvas pixels. The scale comes from the canvas
+     * itself (backing size / CSS size), so it always matches what the
+     * renderer draws, whatever pixel ratio was configured.
+     */
     private getCanvasCoords(e: MouseEvent): [number, number] {
         const rect = this.canvas.getBoundingClientRect();
-        const ratio = window.devicePixelRatio;
+        const scaleX = rect.width > 0 ? this.canvas.width / rect.width : 1;
+        const scaleY = rect.height > 0 ? this.canvas.height / rect.height : 1;
         return [
-            (e.clientX - rect.left) * ratio,
-            (e.clientY - rect.top) * ratio,
+            (e.clientX - rect.left) * scaleX,
+            (e.clientY - rect.top) * scaleY,
         ];
     }
 
