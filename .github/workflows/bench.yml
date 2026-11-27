@@ -12,6 +12,7 @@ on:
 
 permissions:
     contents: read
+    pull-requests: write
 
 jobs:
     bench:
@@ -34,9 +35,39 @@ jobs:
               run: npm ci
 
             - name: Compare against base
+              id: compare
               run: |
-                  set -o pipefail
-                  bash bench/ab.sh ${{ github.event.pull_request.base.sha }} 3 | tee -a "$GITHUB_STEP_SUMMARY"
+                  set +e
+                  bash bench/ab.sh ${{ github.event.pull_request.base.sha }} 3 > bench-report.md
+                  echo "status=$?" >> "$GITHUB_OUTPUT"
+                  cat bench-report.md >> "$GITHUB_STEP_SUMMARY"
+                  cat bench-report.md
+
+            # Keeps a single comment per PR, updated on every push.
+            # Fork PRs get a read-only token, so this may be skipped there.
+            - name: Comment on PR
+              continue-on-error: true
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  PR: ${{ github.event.pull_request.number }}
+                  RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+              run: |
+                  MARKER="<!-- graphgpu-benchmarks -->"
+                  {
+                      echo "$MARKER"
+                      cat bench-report.md
+                      echo
+                      echo "<sub>Commit ${{ github.event.pull_request.head.sha }} · [run]($RUN_URL)</sub>"
+                  } > bench-comment.md
+
+                  ID=$(gh api "repos/${{ github.repository }}/issues/$PR/comments" --paginate \
+                      --jq ".[] | select(.body | startswith(\"$MARKER\")) | .id" | head -n 1)
+
+                  if [ -n "$ID" ]; then
+                      gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$ID" -F body=@bench-comment.md > /dev/null
+                  else
+                      gh pr comment "$PR" --body-file bench-comment.md
+                  fi
 
             - name: Upload results
               if: always()
@@ -45,3 +76,9 @@ jobs:
                   name: benchmarks
                   path: bench-*.json
                   if-no-files-found: ignore
+
+            - name: Check for regressions
+              if: steps.compare.outputs.status != '0'
+              run: |
+                  echo "Benchmarks found a regression (see the table above)."
+                  exit 1
