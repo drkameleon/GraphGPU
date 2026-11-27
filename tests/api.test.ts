@@ -121,3 +121,17 @@ describe('GraphGPU: layout events', () => {
         g.stopLayout();
     });
 });
+
+describe('GraphGPU: static layouts', () => {
+    it('applies a layout and stops the running one', () => {
+        g.startLayout({ minVelocity: 0 });
+        g.applyLayout('grid', { spacing: 0.5 });
+        expect(frames.size).toBe(0);
+        // 20 nodes: 5 columns
+        expect(g.positions[0]).toBeCloseTo(-1);
+        expect(g.positions[2]).toBeCloseTo(-0.5);
+        g.applyLayout('circular');
+        const r = Math.hypot(g.positions[0], g.positions[1]);
+        expect(Math.hypot(g.positions[2], g.positions[3])).toBeCloseTo(r);
+    });
+});

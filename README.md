@@ -126,6 +126,7 @@ new GraphGPU({
 | `stepLayout(n?)` | Run N layout steps synchronously (useful for pre-stabilization) |
 | `startGPULayout(opts?)` | Start GPU compute layout (falls back to CPU if unavailable); stops by itself once settled |
 | `stopGPULayout()` | Stop and destroy GPU layout resources |
+| `applyLayout('circular' \| 'grid', opts?)` | Arrange nodes instantly (grouped by tag), no simulation |
 | `setAnimated(bool)` | Enable live physics mode (layout never auto-stops) |
 | `pinNode(nodeId)` | Pin a node (excluded from physics, position set manually) |
 | `unpinNode(nodeId)` | Unpin a node (rejoin physics simulation) |

@@ -14,6 +14,7 @@ import { Camera } from './core/Camera';
 import { InteractionController } from './interaction/Controls';
 import { ForceLayout } from './layout/ForceLayout';
 import { GPUForceLayout } from './layout/GPUForceLayout';
+import { circularLayout, gridLayout, type StaticLayoutOptions } from './layout/StaticLayouts';
 import { PALETTES } from './utils/palette';
 
 export class GraphGPU {
@@ -440,6 +441,20 @@ export class GraphGPU {
     }
 
     /**
+     * Arrange the nodes instantly: `'circular'` or `'grid'` (grouped by
+     * tag). Stops any running layout.
+     *
+     * @example
+     *   g.applyLayout('circular');
+     *   g.fitView();
+     */
+    applyLayout(type: 'circular' | 'grid', opts?: StaticLayoutOptions): void {
+        this.stopLayout();
+        if (type === 'circular') circularLayout(this.graph, opts);
+        else gridLayout(this.graph, opts);
+    }
+
+    /**
      * Re-randomize all node positions and restart layout.
      * Use this for a full "reset to initial state" effect.
      */
@@ -693,6 +708,9 @@ export { Graph } from './core/Graph';
 export { Camera } from './core/Camera';
 export { Renderer } from './core/Renderer';
 export { ForceLayout } from './layout/ForceLayout';
+export { GPUForceLayout } from './layout/GPUForceLayout';
+export { circularLayout, gridLayout } from './layout/StaticLayouts';
+export type { StaticLayoutOptions } from './layout/StaticLayouts';
 export { InteractionController } from './interaction/Controls';
 export { TagColorMap, PALETTES } from './utils/palette';
 export { parseColor, idealForeground, darken, lighten } from './utils/color';
