@@ -498,6 +498,20 @@ describe('Graph: adjacency index', () => {
         for (let n = 0; n < 200; n++) expect(g.getNodeEdgeIds(n)).toEqual(scan(g, n));
     });
 
+    it('removes a hub and all its edges, keeping the others', () => {
+        const g = new Graph();
+        const hub = g.addNode({ tag: 'hub' });
+        const leaves = Array.from({ length: 5000 }, () => g.addNode({ tag: 'leaf' }));
+        for (const l of leaves) g.addEdge({ tag: 'e', source: hub, target: l });
+        for (let i = 1; i < leaves.length; i++) g.addEdge({ tag: 'chain', source: leaves[i - 1], target: leaves[i] });
+        expect(g.getNodeEdges(leaves[10])).toHaveLength(3);
+
+        g.removeNode(hub);
+        expect(g.numEdges).toBe(leaves.length - 1);
+        expect(g.getNodeEdges(leaves[10]).map(e => e.tag)).toEqual(['chain', 'chain']);
+        expect(g.getNodeEdges(hub)).toEqual([]);
+    });
+
     it('lists self-loops once', () => {
         const g = new Graph();
         const a = g.addNode({ tag: 'n' });
