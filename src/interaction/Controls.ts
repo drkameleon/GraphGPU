@@ -26,6 +26,7 @@ interface DragState {
     lastX: number;
     lastY: number;
     isPan: boolean;
+    isBox: boolean;   // box selection (interaction.lasso + shift-drag)
     moved: boolean;
 }
 
@@ -56,8 +57,12 @@ export class InteractionController {
         startX: 0, startY: 0,
         lastX: 0, lastY: 0,
         isPan: false,
+        isBox: false,
         moved: false,
     };
+
+    /** Box selection rectangle (a DOM overlay while dragging) */
+    private boxElement: HTMLDivElement | null = null;
 
     private hoveredNode: NodeId | null = null;
     private hoveredEdge: EdgeId | null = null;
@@ -335,6 +340,10 @@ export class InteractionController {
                 this.animatedLayout.pin(hitNode);
             }
             // Don't change cursor yet - keep pointer until movement starts
+        } else if (this.opts.lasso && this.opts.selection && e.shiftKey) {
+            this.drag.nodeId = null;
+            this.drag.isPan = false;
+            this.drag.isBox = true;
         } else {
             this.drag.nodeId = null;
             this.drag.isPan = true;
@@ -368,6 +377,12 @@ export class InteractionController {
         this.releasePointer(e);
 
         if (!this.drag.active || e.pointerId !== this.drag.pointerId) return;
+
+        if (this.drag.isBox && this.drag.moved) {
+            this.selectInBox(e);
+            this.resetDrag();
+            return;
+        }
 
         const isClick = !this.drag.moved;
 
@@ -450,7 +465,9 @@ export class InteractionController {
             }
         }
 
-        if (this.drag.isPan && this.opts.pan) {
+        if (this.drag.isBox) {
+            if (this.drag.moved) this.updateBox(sx, sy);
+        } else if (this.drag.isPan && this.opts.pan) {
             if (this.drag.moved) this.canvas.style.cursor = 'grabbing';
             this.camera.pan(dx, dy);
             this.emit('canvas:pan', this.camera.getState());
@@ -539,6 +556,54 @@ export class InteractionController {
         this.resetDrag();
     }
 
+    // =========================================================
+    // Box selection
+    // =========================================================
+
+    /** Canvas pixels per CSS pixel */
+    private pixelScale(): number {
+        const rect = this.canvas.getBoundingClientRect();
+        return rect.width > 0 ? this.canvas.width / rect.width : 1;
+    }
+
+    private updateBox(sx: number, sy: number): void {
+        if (!this.boxElement) {
+            const box = document.createElement('div');
+            box.style.cssText =
+                'position:absolute;pointer-events:none;z-index:3;box-sizing:border-box;' +
+                'border:1px solid rgba(100,140,255,0.9);background:rgba(100,140,255,0.15);';
+            (this.canvas.parentElement ?? document.body).appendChild(box);
+            this.boxElement = box;
+        }
+        const k = this.pixelScale();
+        const box = this.boxElement.style;
+        box.left = `${this.canvas.offsetLeft + Math.min(this.drag.startX, sx) / k}px`;
+        box.top = `${this.canvas.offsetTop + Math.min(this.drag.startY, sy) / k}px`;
+        box.width = `${Math.abs(sx - this.drag.startX) / k}px`;
+        box.height = `${Math.abs(sy - this.drag.startY) / k}px`;
+    }
+
+    private removeBox(): void {
+        this.boxElement?.remove();
+        this.boxElement = null;
+    }
+
+    /** Add every node whose center is inside the box to the selection */
+    private selectInBox(e: PointerEvent): void {
+        const [ax, ay] = this.camera.screenToWorld(this.drag.startX, this.drag.startY);
+        const [bx, by] = this.camera.screenToWorld(this.drag.lastX, this.drag.lastY);
+        const minX = Math.min(ax, bx), maxX = Math.max(ax, bx);
+        const minY = Math.min(ay, by), maxY = Math.max(ay, by);
+        const pos = this.graph.positions;
+        for (let id = 0; id < this.graph.nodeSlots; id++) {
+            if (!this.graph.isNodeActive(id) || this.selectedNodes.has(id)) continue;
+            const x = pos[id * 2], y = pos[id * 2 + 1];
+            if (x < minX || x > maxX || y < minY || y > maxY) continue;
+            this.selectedNodes.add(id);
+            this.emit('node:select', this.graph.getNode(id), e);
+        }
+    }
+
     private unpinDragged(): void {
         // In animated mode, unpin the node so it rejoins physics
         if (this.drag.nodeId !== null && this.animatedMode && this.animatedLayout) {
@@ -547,6 +612,8 @@ export class InteractionController {
     }
 
     private resetDrag(): void {
+        this.removeBox();
+        this.drag.isBox = false;
         this.drag.active = false;
         this.drag.pointerId = -1;
         this.drag.nodeId = null;

@@ -475,3 +475,59 @@ describe('InteractionController: edge events', () => {
         expect(spy).not.toHaveBeenCalled();
     });
 });
+
+// -----------------------------------------------------------
+// Box selection (interaction.lasso)
+// -----------------------------------------------------------
+
+describe('InteractionController: box selection', () => {
+    function withLasso(): void {
+        controls.destroy();
+        controls = new InteractionController(canvas, graph, camera, { lasso: true });
+    }
+
+    it('selects the nodes inside a shift-dragged box', () => {
+        withLasso();
+        const log = record('node:select', 'canvas:pan');
+        // Box around node a (400,300), not b (700,300); starts off any node
+        fire('pointerdown', 240, 140, { shiftKey: true });
+        fire('pointermove', 280, 180, { shiftKey: true });
+        expect(document.querySelectorAll('div').length).toBe(1); // the box overlay
+        fire('pointermove', 460, 360, { shiftKey: true });
+        fire('pointerup', 460, 360, { shiftKey: true });
+
+        expect(log).toEqual(['node:select']);
+        expect([...controls.getSelectedNodes()]).toEqual([a]);
+        expect(document.querySelectorAll('div').length).toBe(0);
+        // The camera didn't pan
+        const [sx] = camera.worldToScreen(0, 0);
+        expect(sx).toBeCloseTo(400);
+    });
+
+    it('adds to the current selection', () => {
+        withLasso();
+        click(700, 300);
+        fire('pointerdown', 240, 140, { shiftKey: true });
+        fire('pointermove', 460, 360, { shiftKey: true });
+        fire('pointerup', 460, 360, { shiftKey: true });
+        expect([...controls.getSelectedNodes()].sort()).toEqual([a, b].sort());
+    });
+
+    it('removes the box when cancelled', () => {
+        withLasso();
+        fire('pointerdown', 240, 140, { shiftKey: true });
+        fire('pointermove', 460, 360, { shiftKey: true });
+        fire('pointercancel', 460, 360);
+        expect(document.querySelectorAll('div').length).toBe(0);
+        expect(controls.getSelectedNodes().size).toBe(0);
+    });
+
+    it('pans as usual when lasso is off', () => {
+        const log = record('canvas:pan', 'node:select');
+        fire('pointerdown', 100, 100, { shiftKey: true });
+        fire('pointermove', 150, 100, { shiftKey: true });
+        fire('pointerup', 150, 100, { shiftKey: true });
+        expect(log).toContain('canvas:pan');
+        expect(log).not.toContain('node:select');
+    });
+});
