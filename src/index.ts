@@ -6,7 +6,7 @@ import type {
     GraphGPUOptions, NodeId, EdgeId,
     Node, Edge,
     GraphGPUEventType, GraphGPUEventHandler,
-    CameraState, Palette,
+    CameraState, Palette, LayoutOptions,
 } from './types';
 import { Graph } from './core/Graph';
 import { Renderer } from './core/Renderer';
@@ -14,6 +14,7 @@ import { Camera } from './core/Camera';
 import { InteractionController } from './interaction/Controls';
 import { ForceLayout } from './layout/ForceLayout';
 import { GPUForceLayout } from './layout/GPUForceLayout';
+import { WorkerForceLayout } from './layout/WorkerForceLayout';
 import { circularLayout, gridLayout, type StaticLayoutOptions } from './layout/StaticLayouts';
 import { PALETTES } from './utils/palette';
 
@@ -22,7 +23,7 @@ export class GraphGPU {
     private renderer: Renderer;
     private camera: Camera;
     private controls: InteractionController;
-    private layout: ForceLayout | null = null;
+    private layout: ForceLayout | WorkerForceLayout | null = null;
     private gpuLayout: GPUForceLayout | null = null;
 
     private canvas: HTMLCanvasElement;
@@ -298,17 +299,19 @@ export class GraphGPU {
         repulsion?: number;
         attraction?: number;
         gravity?: number;
+        /** Run in a Web Worker (default: the `layout.useWorker` option) */
+        useWorker?: boolean;
     }): void {
         // Replace (not stack) any running layout, keeping animated mode
         const wasAnimated = this.layout?.isAnimated() ?? false;
         this.stopLayout();
+        this.layout?.destroy();
 
-        this.layout = new ForceLayout(this.graph, {
+        this.layout = this.createLayout({
             type: 'force',
             ...opts,
+            useWorker: opts?.useWorker ?? this.options.layout?.useWorker,
         });
-
-        this.wireLayoutEvents(this.layout);
 
         if (wasAnimated) {
             this.layout.setAnimated(true);
@@ -318,8 +321,17 @@ export class GraphGPU {
         }
     }
 
+    /** A CPU force layout, in a worker if asked for */
+    private createLayout(opts: LayoutOptions): ForceLayout | WorkerForceLayout {
+        const layout = opts.useWorker
+            ? new WorkerForceLayout(this.graph, opts)
+            : new ForceLayout(this.graph, opts);
+        this.wireLayoutEvents(layout);
+        return layout;
+    }
+
     /** Forward a layout's lifecycle to `layout:start` / `layout:tick` / `layout:stop` */
-    private wireLayoutEvents(layout: ForceLayout | GPUForceLayout): void {
+    private wireLayoutEvents(layout: ForceLayout | WorkerForceLayout | GPUForceLayout): void {
         layout.onStart = () => this.controls.emit('layout:start', { gpu: layout instanceof GPUForceLayout });
         layout.onTick = (iteration: number, energy?: number) =>
             this.controls.emit('layout:tick', { iteration, energy });
@@ -339,11 +351,10 @@ export class GraphGPU {
      */
     stepLayout(steps: number = 1): number {
         if (!this.layout) {
-            this.layout = new ForceLayout(this.graph, {
+            this.layout = this.createLayout({
                 type: 'force',
                 ...this.options.layout,
             });
-            this.wireLayoutEvents(this.layout);
         }
         return this.layout.step(steps);
     }
@@ -584,11 +595,10 @@ export class GraphGPU {
     setAnimated(enabled: boolean): void {
         if (!this.layout) {
             // Create layout if not yet started
-            this.layout = new ForceLayout(this.graph, {
+            this.layout = this.createLayout({
                 type: 'force',
                 ...this.options.layout,
             });
-            this.wireLayoutEvents(this.layout);
         }
         // The CPU layout drives animated mode: don't run both
         if (enabled) this.stopGPULayout();
@@ -696,7 +706,7 @@ export class GraphGPU {
      * Destroy everything - GPU resources, event listeners, etc.
      */
     destroy(): void {
-        this.layout?.stop();
+        this.layout?.destroy();
         this.gpuLayout?.stop();
         this.gpuLayout?.destroy();
         this.gpuLayout = null;
@@ -714,6 +724,7 @@ export { Camera } from './core/Camera';
 export { Renderer } from './core/Renderer';
 export { ForceLayout } from './layout/ForceLayout';
 export { GPUForceLayout } from './layout/GPUForceLayout';
+export { WorkerForceLayout } from './layout/WorkerForceLayout';
 export { circularLayout, gridLayout } from './layout/StaticLayouts';
 export type { StaticLayoutOptions } from './layout/StaticLayouts';
 export { InteractionController } from './interaction/Controls';

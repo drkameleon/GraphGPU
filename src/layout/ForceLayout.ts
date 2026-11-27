@@ -58,6 +58,17 @@ const DEFAULTS: ForceLayoutConfig = {
  */
 const STABLE_TICKS = 10;
 
+/** Simulation ticks per animation frame (faster convergence) */
+const TICKS_PER_FRAME = 3;
+
+/**
+ * The parts of a Graph the layout reads and writes. A plain object
+ * with these fields works too (e.g. the copy inside a Web Worker).
+ */
+export type LayoutGraph = Pick<Graph,
+    'nodeSlots' | 'edgeSlots' | 'positions' | 'sizes' | 'edgeIndices' |
+    'isEdgeActive' | 'dirtyNodes' | 'dirtyEdges'>;
+
 export class ForceLayout {
     private config: ForceLayoutConfig;
     // Per-node: vx, vy (interleaved)
@@ -84,7 +95,7 @@ export class ForceLayout {
     onStop?: () => void;
 
     constructor(
-        private graph: Graph,
+        private graph: LayoutGraph,
         opts?: LayoutOptions,
     ) {
         this.config = {
@@ -148,8 +159,7 @@ export class ForceLayout {
     start(): void {
         if (this.running) return;
         this.running = true;
-        this.calmTicks = 0;
-        if (!this.animated) this.iteration = 0;
+        this.restart();
 
         this.ensureBuffers();
         this.onStart?.();
@@ -157,28 +167,45 @@ export class ForceLayout {
         const loop = () => {
             if (!this.running) return;
 
-            // 3 ticks per frame for faster convergence
-            let maxVel = 0;
-            let settled = false;
-            for (let i = 0; i < 3; i++) {
-                maxVel = this.tick();
-                this.iteration++;
-                settled = this.settled(maxVel);
-            }
+            const { energy, finished } = this.advance();
+            this.onTick?.(this.iteration, energy);
 
-            this.onTick?.(this.iteration, maxVel);
-
-            if (!this.animated) {
-                if (settled || this.iteration >= this.config.maxIterations) {
-                    this.stop();
-                    return;
-                }
+            if (finished && !this.animated) {
+                this.stop();
+                return;
             }
 
             this.frameId = requestAnimationFrame(loop);
         };
 
         this.frameId = requestAnimationFrame(loop);
+    }
+
+    /**
+     * Run one animation frame's worth of ticks. `finished` once the
+     * layout has settled or used up its iterations (callers ignore
+     * it in animated mode).
+     */
+    advance(): { energy: number; finished: boolean } {
+        let energy = 0;
+        let settled = false;
+        for (let i = 0; i < TICKS_PER_FRAME; i++) {
+            energy = this.tick();
+            this.iteration++;
+            settled = this.settled(energy);
+        }
+        return { energy, finished: settled || this.iteration >= this.config.maxIterations };
+    }
+
+    /** Reset the per-run counters, as start() does */
+    restart(): void {
+        this.calmTicks = 0;
+        if (!this.animated) this.iteration = 0;
+    }
+
+    /** Ticks run so far (in this run) */
+    get iterations(): number {
+        return this.iteration;
     }
 
     stop(): void {
@@ -195,6 +222,11 @@ export class ForceLayout {
 
     isRunning(): boolean {
         return this.running;
+    }
+
+    /** Stop and release resources */
+    destroy(): void {
+        this.stop();
     }
 
     reset(): void {

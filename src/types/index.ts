@@ -177,7 +177,7 @@ export interface LayoutOptions {
     /** Barnes-Hut theta (for future GPU layout) */
     barnesHutTheta?: number;
 
-    /** Run layout in Web Worker */
+    /** Run the CPU force layout in a Web Worker (falls back to the main thread) */
     useWorker?: boolean;
 
     // ── Legacy (mapped internally) ──

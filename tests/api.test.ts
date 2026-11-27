@@ -67,6 +67,34 @@ describe('GraphGPU: layout lifecycle', () => {
         expect(frames.size).toBe(0);
     });
 
+    it('runs the layout in a worker with useWorker', () => {
+        const workers: { url: string; type?: string; listeners: Record<string, (e: unknown) => void> }[] = [];
+        vi.stubGlobal('Worker', class {
+            listeners: Record<string, (e: unknown) => void> = {};
+            constructor(url: URL | string, opts?: WorkerOptions) {
+                workers.push({ url: String(url), type: opts?.type, listeners: this.listeners });
+            }
+            postMessage() {}
+            addEventListener(type: string, cb: (e: unknown) => void) { this.listeners[type] = cb; }
+            terminate() {}
+        });
+
+        const before = g.positions.slice(0, 40);
+        g.startLayout({ useWorker: true });
+        expect(workers).toHaveLength(1);
+        expect(workers[0].url).toMatch(/\/ForceWorker\.(js|ts)/);
+        expect(workers[0].type).toBe('module');
+        // Nothing runs on the main thread meanwhile
+        flushFrames(3);
+        expect(g.positions.subarray(0, 40)).toEqual(before);
+
+        // Script failed to load: carry on, on the main thread
+        workers[0].listeners.error(new Event('error'));
+        flushFrames(3);
+        expect(g.positions.subarray(0, 40)).not.toEqual(before);
+        g.stopLayout();
+    });
+
     it('moves nodes while running', () => {
         const before = g.positions.slice(0, 40);
         g.startLayout();

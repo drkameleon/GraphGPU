@@ -13,8 +13,13 @@
 
 import type { NodeId, EdgeId, InteractionOptions, GraphGPUEventType, GraphGPUEventHandler } from '../types';
 import type { Graph } from '../core/Graph';
-import type { ForceLayout } from '../layout/ForceLayout';
 import { Camera } from '../core/Camera';
+
+/** A layout that can hold dragged nodes in place */
+export interface PinnableLayout {
+    pin(nodeId: number): void;
+    unpin(nodeId: number): void;
+}
 import { NodeGrid } from './SpatialIndex';
 
 interface DragState {
@@ -188,7 +193,7 @@ export class InteractionController {
 
     // Animated mode: layout ref for pin/unpin during drag
     private animatedMode: boolean = false;
-    private animatedLayout: ForceLayout | null = null;
+    private animatedLayout: PinnableLayout | null = null;
 
     /** Toggle multi-select always-on mode */
     setMultiSelectEnabled(enabled: boolean): void {
@@ -196,7 +201,7 @@ export class InteractionController {
     }
 
     /** Set animated mode + provide layout reference for pin/unpin */
-    setAnimatedMode(enabled: boolean, layout: ForceLayout | null): void {
+    setAnimatedMode(enabled: boolean, layout: PinnableLayout | null): void {
         this.animatedMode = enabled;
         this.animatedLayout = layout;
     }

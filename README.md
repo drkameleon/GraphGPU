@@ -201,6 +201,14 @@ g.startLayout({
 > // Now drag any node — connected nodes will follow with spring physics!
 > ```
 
+> [!TIP]
+> **Off the main thread**: `useWorker` runs the CPU layout in a Web Worker, so big layouts don't block the page. Positions are handed back and forth (transferred, not copied) once per frame, and nodes you drag keep their place. If workers aren't available, it quietly runs on the main thread instead.
+> ```typescript
+> g.startLayout({ useWorker: true });
+> // or, for every layout: new GraphGPU({ canvas, layout: { type: 'force', useWorker: true } })
+> ```
+> Works with bundlers (Vite, webpack) and the standalone build. With Vite in dev, add `optimizeDeps: { exclude: ['graphgpu'] }` so the worker file isn't pre-bundled away.
+
 > [!NOTE]
 > The CPU layout uses Barnes-Hut quadtree approximation for O(n log n) repulsion. For exact (but slower) O(n²) computation, set `barnesHutTheta: 0`. The GPU layout runs the same physics model on compute shaders: exact all-pairs repulsion tiled through workgroup memory, and race-free springs (every node sums its own, from a per-node edge list).
 
