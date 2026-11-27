@@ -1,0 +1,73 @@
+name: Benchmarks
+
+on:
+    pull_request:
+        paths:
+            - 'src/**'
+            - 'bench/**'
+            - 'tests/helpers.ts'
+            - 'package.json'
+            - 'package-lock.json'
+            - '.github/workflows/bench.yml'
+
+permissions:
+    contents: read
+
+jobs:
+    bench:
+        name: Benchmark
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 24
+                  cache: npm
+
+            - name: Install dependencies
+              run: npm ci
+
+            # Both runs use the PR's benchmark suite on the same machine:
+            # only src/ is swapped, so the numbers are directly comparable.
+
+            - name: Benchmark base
+              id: base
+              continue-on-error: true
+              run: |
+                  rm -rf src
+                  git checkout ${{ github.event.pull_request.base.sha }} -- src
+                  npm run bench -s -- --json bench-base.json
+
+            - name: Restore head
+              run: |
+                  rm -rf src
+                  git checkout HEAD -- src
+                  git status --short
+
+            - name: Benchmark head
+              run: npm run bench -s -- --json bench-head.json
+
+            - name: Compare
+              run: |
+                  if [ "${{ steps.base.outcome }}" != "success" ]; then
+                      echo "### Benchmarks" >> "$GITHUB_STEP_SUMMARY"
+                      echo "" >> "$GITHUB_STEP_SUMMARY"
+                      echo "Base could not be benchmarked with this suite, no comparison available." >> "$GITHUB_STEP_SUMMARY"
+                      exit 0
+                  fi
+                  set -o pipefail
+                  npx tsx bench/compare.ts bench-base.json bench-head.json --warn 1.1 --fail 1.5 | tee -a "$GITHUB_STEP_SUMMARY"
+
+            - name: Upload results
+              if: always()
+              uses: actions/upload-artifact@v4
+              with:
+                  name: benchmarks
+                  path: bench-*.json
+                  if-no-files-found: ignore
