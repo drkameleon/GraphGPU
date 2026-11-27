@@ -987,44 +987,78 @@ export class Renderer implements PositionTarget {
         lctx.restore();
     }
 
+    // Reused grid storage (cell → node list, CSR layout)
+    private gridIds: Int32Array = new Int32Array(0);
+    private gridStart: Int32Array = new Int32Array(0);
+    private gridItems: Int32Array = new Int32Array(0);
+    private gridSpan: Int32Array = new Int32Array(4);
+
     /**
      * Uniform grid of the node circles that intersect the given area
      * (in CSS pixels), for "is this point inside any node?" queries.
+     * Cells are sized by both node density and node size, so every
+     * node only lands in a few cells.
      */
     private buildNodeGrid(slots: number, minX: number, minY: number, maxX: number, maxY: number) {
         const SX = this.labelSX, SY = this.labelSY, R = this.labelR;
         const graph = this.graph;
 
         // Nodes whose circle reaches the query area
-        const ids: number[] = [];
+        if (this.gridIds.length < slots) this.gridIds = new Int32Array(slots * 2);
+        const ids = this.gridIds;
+        let n = 0;
+        let sumR = 0;
         for (let id = 0; id < slots; id++) {
             const r = R[id];
             if (r <= 0) continue;
             if (SX[id] + r < minX || SX[id] - r > maxX || SY[id] + r < minY || SY[id] - r > maxY) continue;
             if (!graph.isNodeActive(id)) continue;
-            ids.push(id);
+            ids[n++] = id;
+            sumR += r;
         }
 
         const w = Math.max(1, maxX - minX);
         const h = Math.max(1, maxY - minY);
-        const cell = Math.min(512, Math.max(16, Math.sqrt((w * h) / Math.max(1, ids.length))));
+        const byDensity = Math.sqrt((w * h) / Math.max(1, n));
+        const byDiameter = n > 0 ? (2 * sumR) / n : 0;
+        const cell = Math.min(1024, Math.max(16, byDensity, byDiameter));
         const cols = Math.ceil(w / cell) + 1;
         const rows = Math.ceil(h / cell) + 1;
-        const cells = new Map<number, number[]>();
+        const cellCount = cols * rows;
 
-        for (const id of ids) {
+        // Two passes (count, then fill) into flat arrays
+        if (this.gridStart.length < cellCount + 1) this.gridStart = new Int32Array((cellCount + 1) * 2);
+        const start = this.gridStart;
+        start.fill(0, 0, cellCount + 1);
+
+        // Cell range covered by a node: [x0, x1, y0, y1]
+        const sp = this.gridSpan;
+        const span = (id: number) => {
             const r = R[id];
-            const x0 = Math.max(0, Math.floor((SX[id] - r - minX) / cell));
-            const x1 = Math.min(cols - 1, Math.floor((SX[id] + r - minX) / cell));
-            const y0 = Math.max(0, Math.floor((SY[id] - r - minY) / cell));
-            const y1 = Math.min(rows - 1, Math.floor((SY[id] + r - minY) / cell));
-            for (let cy = y0; cy <= y1; cy++) {
-                for (let cx = x0; cx <= x1; cx++) {
-                    const key = cy * cols + cx;
-                    let list = cells.get(key);
-                    if (!list) cells.set(key, list = []);
-                    list.push(id);
-                }
+            sp[0] = Math.max(0, Math.floor((SX[id] - r - minX) / cell));
+            sp[1] = Math.min(cols - 1, Math.floor((SX[id] + r - minX) / cell));
+            sp[2] = Math.max(0, Math.floor((SY[id] - r - minY) / cell));
+            sp[3] = Math.min(rows - 1, Math.floor((SY[id] + r - minY) / cell));
+        };
+
+        let total = 0;
+        for (let i = 0; i < n; i++) {
+            span(ids[i]);
+            for (let cy = sp[2]; cy <= sp[3]; cy++) {
+                for (let cx = sp[0]; cx <= sp[1]; cx++) start[cy * cols + cx + 1]++;
+            }
+            total += (sp[1] - sp[0] + 1) * (sp[3] - sp[2] + 1);
+        }
+        for (let c = 0; c < cellCount; c++) start[c + 1] += start[c];
+
+        if (this.gridItems.length < total) this.gridItems = new Int32Array(total * 2);
+        const items = this.gridItems;
+        const fill = start.slice(0, cellCount);
+        for (let i = 0; i < n; i++) {
+            const id = ids[i];
+            span(id);
+            for (let cy = sp[2]; cy <= sp[3]; cy++) {
+                for (let cx = sp[0]; cx <= sp[1]; cx++) items[fill[cy * cols + cx]++] = id;
             }
         }
 
@@ -1033,9 +1067,9 @@ export class Renderer implements PositionTarget {
                 const cx = Math.floor((x - minX) / cell);
                 const cy = Math.floor((y - minY) / cell);
                 if (cx < 0 || cy < 0 || cx >= cols || cy >= rows) return false;
-                const list = cells.get(cy * cols + cx);
-                if (!list) return false;
-                for (const id of list) {
+                const c = cy * cols + cx;
+                for (let k = start[c], end = start[c + 1]; k < end; k++) {
+                    const id = items[k];
                     const dx = x - SX[id];
                     const dy = y - SY[id];
                     if (dx * dx + dy * dy < R[id] * R[id]) return true;
