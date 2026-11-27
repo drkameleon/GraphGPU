@@ -40,12 +40,19 @@ export class Renderer {
     private nodeBindGroup!: GPUBindGroup;
 
     // GPU Buffers - Edges
-    private gpuEdgeVerts!: GPUBuffer;
+    private gpuEdges!: GPUBuffer;           // per edge: src u32, tgt u32, rgba8 color
+    private edgeBindGroupLayout!: GPUBindGroupLayout;
     private edgeUniformBuffer!: GPUBuffer;
     private edgeBindGroup!: GPUBindGroup;
 
-    // CPU edge vertex staging
-    private edgeVertexData: Float32Array = new Float32Array(0);
+    // CPU edge staging: [src, tgt, packedColor] per edge slot
+    private edgeData: Uint32Array = new Uint32Array(0);
+
+    // Edges currently on the GPU (re-uploaded only when edges change)
+    private uploadedStructure: number = -1;
+    private uploadedEdgeColors: number = -1;
+    private drawnEdges: number = 0;        // instances drawn (edge slots)
+    private visibleEdges: number = 0;      // active ones
 
     // Config
     private canvas: HTMLCanvasElement;
@@ -243,30 +250,36 @@ export class Renderer {
         // --- Edge pipeline (lines) ---
         const edgeModule = this.device.createShaderModule({ code: EDGE_SHADER });
 
-        const edgeBindGroupLayout = this.device.createBindGroupLayout({
-            entries: [{
-                binding: 0,
-                visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
-                buffer: { type: 'uniform' },
-            }],
+        this.edgeBindGroupLayout = this.device.createBindGroupLayout({
+            entries: [
+                {
+                    binding: 0,
+                    visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+                    buffer: { type: 'uniform' },
+                },
+                {
+                    // Node positions, read directly by the edge vertex shader
+                    binding: 1,
+                    visibility: GPUShaderStage.VERTEX,
+                    buffer: { type: 'read-only-storage' },
+                },
+            ],
         });
 
         this.edgePipeline = this.device.createRenderPipeline({
             layout: this.device.createPipelineLayout({
-                bindGroupLayouts: [edgeBindGroupLayout],
+                bindGroupLayouts: [this.edgeBindGroupLayout],
             }),
             vertex: {
                 module: edgeModule,
                 entryPoint: 'vs_edge',
                 buffers: [{
-                    // Per-instance: srcPos(vec2f) + tgtPos(vec2f) + alpha(f32) + color(vec3f)
-                    arrayStride: 32,  // 8 floats × 4 bytes
+                    // Per-instance: endpoints (2 × u32) + color (rgba8, a = 0 → hidden)
+                    arrayStride: 12,
                     stepMode: 'instance',
                     attributes: [
-                        { shaderLocation: 0, offset: 0, format: 'float32x2' },   // srcPos
-                        { shaderLocation: 1, offset: 8, format: 'float32x2' },   // tgtPos
-                        { shaderLocation: 2, offset: 16, format: 'float32' },    // alpha
-                        { shaderLocation: 3, offset: 20, format: 'float32x3' },  // color RGB
+                        { shaderLocation: 0, offset: 0, format: 'uint32x2' },   // src, tgt
+                        { shaderLocation: 1, offset: 8, format: 'unorm8x4' },   // color
                     ],
                 }],
             },
@@ -295,10 +308,16 @@ export class Renderer {
             layout: nodeBindGroupLayout,
             entries: [{ binding: 0, resource: { buffer: this.nodeUniformBuffer } }],
         });
+    }
 
+    /** (Re)create the edge bind group: it references the positions buffer */
+    private createEdgeBindGroup(): void {
         this.edgeBindGroup = this.device.createBindGroup({
-            layout: edgeBindGroupLayout,
-            entries: [{ binding: 0, resource: { buffer: this.edgeUniformBuffer } }],
+            layout: this.edgeBindGroupLayout,
+            entries: [
+                { binding: 0, resource: { buffer: this.edgeUniformBuffer } },
+                { binding: 1, resource: { buffer: this.gpuPositions } },
+            ],
         });
     }
 
@@ -320,7 +339,7 @@ export class Renderer {
 
         this.gpuPositions = this.device.createBuffer({
             size: cap * 2 * 4,
-            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
         this.gpuColors = this.device.createBuffer({
             size: cap * 4 * 4,
@@ -335,17 +354,18 @@ export class Renderer {
             usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
         });
         this.gpuNodeCapacity = cap;
+        this.createEdgeBindGroup();
     }
 
     private reallocEdgeBuffers(capacity: number): void {
         const cap = Math.max(capacity, 512);
-        this.gpuEdgeVerts?.destroy();
-        this.gpuEdgeVerts = this.device.createBuffer({
-            size: cap * 8 * 4, // 8 floats per edge instance (srcXY, tgtXY, alpha, RGB)
+        this.gpuEdges?.destroy();
+        this.gpuEdges = this.device.createBuffer({
+            size: cap * 3 * 4, // src, tgt, packed color
             usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
         });
         this.gpuEdgeCapacity = cap;
-        this.edgeVertexData = new Float32Array(cap * 8);
+        this.edgeData = new Uint32Array(cap * 3);
     }
 
     private uploadNodeData(): void {
@@ -382,49 +402,49 @@ export class Renderer {
         this.selectionDirty = false;
     }
 
-    // Visible edge count (updated during upload)
-    private lastVisibleEdges: number = 0;
-
+    /**
+     * Upload the edge list. Edges only store endpoint ids + color:
+     * the vertex shader reads node positions from the GPU, so this
+     * only runs when edges are added, removed or recolored — not
+     * when nodes move.
+     */
     private uploadEdgeData(): void {
         const edgeCount = this.graph.edgeSlots;
         if (edgeCount > this.gpuEdgeCapacity) {
             this.reallocEdgeBuffers(edgeCount * 2);
         }
 
-        const positions = this.graph.positions;
         const indices = this.graph.edgeIndices;
         const edgeColors = this.graph.edgeColors;
-        let writeIdx = 0;
-        let visibleEdges = 0;
+        const data = this.edgeData;
+        let visible = 0;
 
         for (let i = 0; i < edgeCount; i++) {
             const src = indices[i * 2];
             const tgt = indices[i * 2 + 1];
-            if (!this.graph.isNodeActive(src) || !this.graph.isNodeActive(tgt)) continue;
-            if (!this.graph.isEdgeActive(i)) continue;
-
-            // Per-instance: srcX, srcY, tgtX, tgtY, alpha, R, G, B
-            this.edgeVertexData[writeIdx++] = positions[src * 2];
-            this.edgeVertexData[writeIdx++] = positions[src * 2 + 1];
-            this.edgeVertexData[writeIdx++] = positions[tgt * 2];
-            this.edgeVertexData[writeIdx++] = positions[tgt * 2 + 1];
-            this.edgeVertexData[writeIdx++] = 1.0;
-            this.edgeVertexData[writeIdx++] = edgeColors[i * 3];
-            this.edgeVertexData[writeIdx++] = edgeColors[i * 3 + 1];
-            this.edgeVertexData[writeIdx++] = edgeColors[i * 3 + 2];
-            visibleEdges++;
+            const o = i * 3;
+            if (!this.graph.isEdgeActive(i) ||
+                !this.graph.isNodeActive(src) || !this.graph.isNodeActive(tgt)) {
+                // Removed slot: alpha 0 makes the shader skip it
+                data[o] = 0;
+                data[o + 1] = 0;
+                data[o + 2] = 0;
+                continue;
+            }
+            data[o] = src;
+            data[o + 1] = tgt;
+            data[o + 2] = packColor(edgeColors[i * 3], edgeColors[i * 3 + 1], edgeColors[i * 3 + 2]);
+            visible++;
         }
 
-        this.lastVisibleEdges = visibleEdges;
-
-        if (visibleEdges > 0) {
-            this.device.queue.writeBuffer(
-                this.gpuEdgeVerts, 0,
-                this.edgeVertexData.buffer, 0, visibleEdges * 8 * 4,
-            );
+        if (edgeCount > 0) {
+            this.device.queue.writeBuffer(this.gpuEdges, 0, data.buffer, 0, edgeCount * 3 * 4);
         }
 
-        this.graph.dirtyEdges = false;
+        this.drawnEdges = edgeCount;
+        this.visibleEdges = visible;
+        this.uploadedStructure = this.graph.structureVersion;
+        this.uploadedEdgeColors = this.graph.edgeColorVersion;
     }
 
     // =========================================================
@@ -445,9 +465,16 @@ export class Renderer {
         // Update camera matrix
         this.camera.update();
 
-        // Upload dirty data
-        if (this.graph.dirtyNodes || this.selectionDirty) this.uploadNodeData();
-        if (this.graph.dirtyEdges) this.uploadEdgeData();
+        // Upload dirty data. Edges follow node positions on the GPU,
+        // so moving nodes only uploads node data.
+        if (this.graph.dirtyNodes || this.graph.dirtyEdges || this.selectionDirty) {
+            this.uploadNodeData();
+        }
+        if (this.uploadedStructure !== this.graph.structureVersion ||
+            this.uploadedEdgeColors !== this.graph.edgeColorVersion) {
+            this.uploadEdgeData();
+        }
+        this.graph.dirtyEdges = false;
 
         // Write uniforms
         const uniforms = new Float32Array(16);
@@ -503,12 +530,12 @@ export class Renderer {
         });
 
         // Draw edges first (behind nodes) - 6 verts per quad, instanced
-        const visibleEdges = this.lastVisibleEdges;
+        const visibleEdges = this.visibleEdges;
         if (visibleEdges > 0) {
             pass.setPipeline(this.edgePipeline);
             pass.setBindGroup(0, this.edgeBindGroup);
-            pass.setVertexBuffer(0, this.gpuEdgeVerts);
-            pass.draw(6, visibleEdges);
+            pass.setVertexBuffer(0, this.gpuEdges);
+            pass.draw(6, this.drawnEdges);
         }
 
         // Draw nodes
@@ -863,12 +890,14 @@ export class Renderer {
     /** Clean up all GPU resources */
     destroy(): void {
         this.stop();
-        document.fonts?.removeEventListener?.('loadingdone', this.onFontsLoaded);
+        if (typeof document !== 'undefined') {
+            document.fonts?.removeEventListener?.('loadingdone', this.onFontsLoaded);
+        }
         this.gpuPositions?.destroy();
         this.gpuColors?.destroy();
         this.gpuSizes?.destroy();
         this.gpuSelection?.destroy();
-        this.gpuEdgeVerts?.destroy();
+        this.gpuEdges?.destroy();
         this.nodeUniformBuffer?.destroy();
         this.edgeUniformBuffer?.destroy();
         this.msaaTexture?.destroy();
@@ -883,4 +912,14 @@ export class Renderer {
             visibleNodes: 0, visibleEdges: 0,
         };
     }
+}
+
+// -----------------------------------------------------------
+// Helpers
+// -----------------------------------------------------------
+
+/** Pack an RGB color (0-1) into rgba8unorm with alpha = 255 */
+function packColor(r: number, g: number, b: number): number {
+    const to8 = (v: number) => Math.max(0, Math.min(255, Math.round(v * 255)));
+    return (to8(r) | (to8(g) << 8) | (to8(b) << 16) | (255 << 24)) >>> 0;
 }
