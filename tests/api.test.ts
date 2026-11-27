@@ -121,6 +121,43 @@ describe('GraphGPU: layout lifecycle', () => {
     });
 });
 
+describe('GraphGPU: removing selected items', () => {
+    const internals = () => g as unknown as {
+        controls: { getSelectedNodes(): Set<number>; getSelectedEdges(): Set<number>; emit(t: string, n: unknown): void };
+        renderer: { selectionData: Float32Array };
+    };
+
+    function selectNode(id: number) {
+        // As a click would
+        const c = internals().controls as unknown as { selectedNodes: Set<number> };
+        c.selectedNodes.add(id);
+        (g as unknown as { renderer: { setSelection(id: number, s: boolean): void } }).renderer.setSelection(id, true);
+    }
+
+    it('doesn\'t leave a removed node selected for the next one in its slot', () => {
+        selectNode(5);
+        const deselected = vi.fn();
+        g.on('node:deselect', deselected);
+        g.unput(5);
+        expect(deselected).toHaveBeenCalledTimes(1);
+        expect(internals().controls.getSelectedNodes().has(5)).toBe(false);
+        expect(internals().renderer.selectionData[5]).toBe(0);
+
+        // The slot gets reused: the new node isn't selected
+        const id = g.put('n', { name: 'new' });
+        expect(id).toBe(5);
+        expect(internals().controls.getSelectedNodes().has(id)).toBe(false);
+    });
+
+    it('drops the selection on clear()', () => {
+        selectNode(1);
+        selectNode(2);
+        g.clear();
+        expect(internals().controls.getSelectedNodes().size).toBe(0);
+        expect(Array.from(internals().renderer.selectionData).every((v) => v === 0)).toBe(true);
+    });
+});
+
 describe('GraphGPU: palette', () => {
     it('keeps explicit node colors when switching palettes', () => {
         const red = g.put('custom', 'Red', {}, { color: '#ff0000' });

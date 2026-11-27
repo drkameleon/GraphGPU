@@ -179,6 +179,33 @@ export class InteractionController {
         return new Set(this.selectedEdges);
     }
 
+    /**
+     * Drop nodes/edges that are about to be removed from the graph:
+     * deselect them (with events), stop hovering or dragging them.
+     * Call before removing, while they can still be looked up.
+     */
+    forget(nodes: Iterable<NodeId>, edges: Iterable<EdgeId>): void {
+        for (const id of nodes) {
+            if (this.drag.active && this.drag.nodeId === id) this.cancelDrag();
+            if (this.hoveredNode === id) this.updateHover(null);
+            if (this.selectedNodes.delete(id)) this.emit('node:deselect', this.graph.getNode(id));
+        }
+        for (const id of edges) {
+            if (this.hoveredEdge === id) this.updateEdgeHover(null);
+            if (this.selectedEdges.delete(id)) this.emit('edge:deselect', this.graph.getEdge(id) ?? { id });
+        }
+    }
+
+    /** forget() everything (the graph is being cleared) */
+    forgetAll(): void {
+        const nodes = [...this.selectedNodes];
+        if (this.hoveredNode !== null) nodes.push(this.hoveredNode);
+        if (this.drag.nodeId !== null) nodes.push(this.drag.nodeId);
+        const edges = [...this.selectedEdges];
+        if (this.hoveredEdge !== null) edges.push(this.hoveredEdge);
+        this.forget(nodes, edges);
+    }
+
     /** Toggle selection on/off */
     setSelectionEnabled(enabled: boolean): void {
         this.opts.selection = enabled;
