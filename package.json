@@ -25,6 +25,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "bench": "tsx bench/run.ts",
+    "bench:compare": "bash bench/ab.sh",
     "clean": "rm -rf dist",
     "prepublishOnly": "npm run clean && npm run build"
   },
