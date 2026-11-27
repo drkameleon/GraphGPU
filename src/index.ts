@@ -181,6 +181,10 @@ export class GraphGPU {
      * Inspired by graphGPU's `unput` command.
      */
     unput(id: NodeId): void {
+        if (!this.graph.isNodeActive(id)) return;
+        // Removed slots get reused: don't leave them selected
+        this.controls.forget([id], this.graph.getNodeEdgeIds(id));
+        this.renderer.setSelection(id, false);
         this.graph.removeNode(id);
     }
 
@@ -220,6 +224,8 @@ export class GraphGPU {
      * Inspired by graphGPU's `unlink` command.
      */
     unlink(edgeId: EdgeId): void {
+        this.controls.forget([], [edgeId]);
+        this.renderer.setEdgeSelection(edgeId, false);
         this.graph.removeEdge(edgeId);
     }
 
@@ -268,6 +274,9 @@ export class GraphGPU {
      * Clear the entire graph.
      */
     clear(): void {
+        this.controls.forgetAll();
+        this.renderer.clearSelection();
+        this.renderer.clearEdgeSelection();
         this.graph.clear();
     }
 

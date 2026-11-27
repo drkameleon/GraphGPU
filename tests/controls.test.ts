@@ -117,6 +117,41 @@ describe('InteractionController: selection', () => {
 // Dragging & panning
 // -----------------------------------------------------------
 
+describe('InteractionController: forgetting removed items', () => {
+    it('deselects a node being removed', () => {
+        click(400, 300);
+        const log = record('node:deselect');
+        controls.forget([a], []);
+        expect(log).toEqual(['node:deselect']);
+        expect(controls.getSelectedNodes().size).toBe(0);
+    });
+
+    it('deselects edges being removed', () => {
+        graph.addEdge({ tag: 'e', source: a, target: b });
+        click(550, 300);
+        expect(controls.getSelectedEdges().size).toBe(1);
+        const log = record('edge:deselect');
+        controls.forget([], [0]);
+        expect(log).toEqual(['edge:deselect']);
+        expect(controls.getSelectedEdges().size).toBe(0);
+    });
+
+    it('leaves everything else alone', () => {
+        click(400, 300);
+        const log = record('node:deselect', 'edge:deselect');
+        controls.forget([b], [5]);
+        expect(log).toEqual([]);
+        expect([...controls.getSelectedNodes()]).toEqual([a]);
+    });
+
+    it('forgets everything on forgetAll', () => {
+        click(400, 300);
+        click(700, 300, { shiftKey: true });
+        controls.forgetAll();
+        expect(controls.getSelectedNodes().size).toBe(0);
+    });
+});
+
 describe('InteractionController: dragging', () => {
     it('drags a node with the cursor', () => {
         const log = record('node:dragstart', 'node:drag', 'node:dragend', 'node:click', 'node:select');
