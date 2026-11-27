@@ -199,6 +199,14 @@ npm run dev
 
 Features light/dark theme toggle, palette switching, node editing/deletion, animated physics mode, a live settings panel (node size, edge opacity, labels, all physics parameters), and a status bar with live node properties.
 
+To see how it scales on your GPU, use the **stress test** button, or open the demo with a graph size in the URL:
+
+```
+?nodes=100000&edges=300000&layout=gpu
+```
+
+`nodes` and `edges` set the random graph's size (edges default to 3× the nodes), `layout=gpu` runs the force layout on the GPU (default: `cpu`). An FPS counter can be toggled in the settings.
+
 ### Architecture
 
 ```
