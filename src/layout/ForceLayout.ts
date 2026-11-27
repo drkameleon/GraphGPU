@@ -190,6 +190,10 @@ export class ForceLayout {
     // =========================================================
 
     private tick(): number {
+        // Grow first: nodes may have been added since the last tick,
+        // and the locals below must point at the resized buffers
+        this.ensureBuffers();
+
         const n = this.graph.numNodes;
         const pos = this.graph.positions;
         const vel = this.velocities;
@@ -199,8 +203,6 @@ export class ForceLayout {
         const sizes = this.graph.sizes;
         const pinned = this.pinned;
         const cfg = this.config;
-
-        this.ensureBuffers();
 
         // Reset forces
         forces.fill(0);
