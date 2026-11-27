@@ -187,6 +187,13 @@ export class InteractionController {
         this.animatedLayout = layout;
     }
 
+    private edgeWidth = 0; // CSS px, 0 = scale with nodes
+
+    /** Fixed edge width in CSS pixels (must match the renderer's, for edge picking) */
+    setEdgeWidth(width: number): void {
+        this.edgeWidth = Math.max(0, width);
+    }
+
     /** Update node scale (must match the renderer's, for hit testing) */
     setNodeScale(scale: number): void {
         this.nodeScale = scale;
@@ -223,8 +230,13 @@ export class InteractionController {
         const [, wy1] = this.camera.screenToWorld(screenX, screenY + 1);
         const worldPerPx = Math.abs(wy1 - wy);
 
-        // Same width as the edge shader (half-width ≥ 1.25px), + 3px slack
-        const halfWidth = Math.max(1.25 * worldPerPx, this.nodeScale * 0.01);
+        // Same width as the edge shader (half-width ≥ 1.25px, or the fixed
+        // edgeWidth in CSS px), + 3px slack
+        const rect = this.canvas.getBoundingClientRect();
+        const pxRatio = rect.width > 0 ? this.canvas.width / rect.width : 1;
+        const halfWidth = this.edgeWidth > 0
+            ? this.edgeWidth * 0.5 * pxRatio * worldPerPx
+            : Math.max(1.25 * worldPerPx, this.nodeScale * 0.01);
         const tolerance = halfWidth + 3 * worldPerPx;
 
         const graph = this.graph;

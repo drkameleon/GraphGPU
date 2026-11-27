@@ -101,7 +101,7 @@ export interface GraphGPUOptions {
     /** Edge base opacity 0-1 */
     edgeOpacity?: number;
 
-    /** Edge base width in pixels */
+    /** Fixed edge width in CSS pixels (default: scales with node size) */
     edgeWidth?: number;
 
     /** Active color palette */
@@ -227,19 +227,19 @@ export interface LabelOptions {
     /** Show node labels */
     enabled?: boolean;
 
-    /** CSS font string */
+    /** Font family (CSS), e.g. '"Inter", sans-serif' */
     font?: string;
 
-    /** Label color (auto-contrast if omitted) */
+    /** Node label color (auto-contrast against the node if omitted) */
     color?: ColorInput;
 
-    /** Min zoom level to show labels */
+    /** Min camera zoom level to show labels at all */
     visibleAtZoom?: number;
 
-    /** Which property to use as label */
+    /** Node property to use as label (default: name, then title, then tag) */
     property?: string;
 
-    /** Max characters before truncation */
+    /** Max characters before truncation (with an ellipsis) */
     maxLength?: number;
 }
 
