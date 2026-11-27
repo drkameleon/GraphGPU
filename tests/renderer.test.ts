@@ -162,3 +162,80 @@ describe('Renderer: edges', () => {
         expect(gpu.draws.at(-2)).toEqual([6, 9]);
     });
 });
+
+describe('Renderer: GPU layout with shared positions', () => {
+    interface Internals {
+        renderer: { gpuPositions: FakeBuffer; externalPositions: boolean };
+    }
+    const internals = () => (g as unknown as Internals).renderer;
+    const positionWrites = () => gpu.writes.filter(w => w.buffer === internals().gpuPositions);
+    const gpuPositions = () => new Float32Array(internals().gpuPositions.data);
+
+    it('never uploads CPU positions while the GPU layout runs', async () => {
+        await flushFrames(1);
+        await g.startGPULayout({ stepsPerFrame: 1, maxIterations: 1000 });
+        await flushFrames(1);
+        const before = positionWrites().length;
+
+        expect(await framesDrawn(10)).toBe(10);
+        expect(positionWrites().length).toBe(before);
+        expect(gpu.errors).toEqual([]);
+        g.stopGPULayout();
+    });
+
+    it('keeps the CPU copy of positions up to date in the background', async () => {
+        await flushFrames(1);
+        const x0 = g.positions[0];
+        await g.startGPULayout({ stepsPerFrame: 1, maxIterations: 1000 });
+        await flushFrames(5);
+        // The fake compute moves every node by +1 per step
+        expect(g.positions[0]).toBeGreaterThan(x0 + 2);
+        g.stopGPULayout();
+    });
+
+    it('sends dragged nodes to the GPU as 8-byte writes', async () => {
+        await flushFrames(1);
+        await g.startGPULayout({ stepsPerFrame: 1, maxIterations: 1000 });
+        await flushFrames(1);
+
+        const before = positionWrites().length;
+        g.getGraph().setNodePosition(3, 42, -42);
+        await flushFrames(1);
+        const writes = positionWrites().slice(before);
+        expect(writes).toEqual([{ buffer: internals().gpuPositions, bytes: 8 }]);
+        g.stopGPULayout();
+    });
+
+    it('syncs the CPU copy and hands positions back on stop', async () => {
+        await flushFrames(1);
+        await g.startGPULayout({ stepsPerFrame: 1, maxIterations: 1000 });
+        await flushFrames(3);
+        g.stopLayout();
+        await flushFrames(2);
+
+        expect(internals().externalPositions).toBe(false);
+        expect(Array.from(g.positions.subarray(0, 20))).toEqual(Array.from(gpuPositions().subarray(0, 20)));
+    });
+
+    it('stops by itself at maxIterations and hands positions back', async () => {
+        await flushFrames(1);
+        await g.startGPULayout({ stepsPerFrame: 1, maxIterations: 3 });
+        await flushFrames(6);
+        expect(internals().externalPositions).toBe(false);
+    });
+
+    it('carries GPU positions over when the buffer grows', async () => {
+        await flushFrames(1);
+        await g.startGPULayout({ stepsPerFrame: 1, maxIterations: 1000 });
+        await flushFrames(2);
+        const node0 = gpuPositions()[0];
+
+        for (let i = 0; i < 600; i++) g.put('late', { name: `l${i}` });
+        await flushFrames(1);
+        // Same node, carried over to the new buffer, then stepped on
+        expect(gpuPositions()[0]).toBeGreaterThanOrEqual(node0);
+        expect(gpuPositions().length).toBeGreaterThanOrEqual(610 * 2);
+        expect(gpu.errors).toEqual([]);
+        g.stopGPULayout();
+    });
+});

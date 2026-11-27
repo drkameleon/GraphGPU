@@ -11,6 +11,12 @@
 
 import { Graph } from '../../src/core/Graph';
 import { Renderer } from '../../src/core/Renderer';
+import { GPUForceLayout } from '../../src/layout/GPUForceLayout';
+
+// Deno has no animation frames
+const g = globalThis as Record<string, unknown>;
+g.requestAnimationFrame ??= (cb: (t: number) => void) => setTimeout(() => cb(performance.now()), 4);
+g.cancelAnimationFrame ??= (id: number) => clearTimeout(id);
 
 const SIZE = 256;
 const BG: [number, number, number, number] = [0, 0, 0, 1];
@@ -175,6 +181,47 @@ await device.queue.onSubmittedWorkDone();
 const growErr = await device.popErrorScope();
 check('growing buffers has no validation errors', growErr === null, growErr?.message);
 
+// -----------------------------------------------------------
+// GPU layout writing straight into the renderer's buffer
+// -----------------------------------------------------------
+
+const before = graph.positions.slice(0, graph.nodeSlots * 2);
+device.pushErrorScope('validation');
+const layout = new GPUForceLayout(device, graph, { stepsPerFrame: 2, maxIterations: 100000 }, renderer);
+await layout.start();
+for (let i = 0; i < 30; i++) {
+    await new Promise(r => setTimeout(r, 8));
+    if (renderer.isDirty()) renderer.renderFrame(100 + i * 16);
+}
+// Nodes added while running end up in the shared buffer too
+for (let i = 0; i < 300; i++) graph.addNode({ tag: 'late', x: 0, y: 0 });
+for (let i = 0; i < 10; i++) {
+    await new Promise(r => setTimeout(r, 8));
+    if (renderer.isDirty()) renderer.renderFrame(600 + i * 16);
+}
+layout.stop();
+await new Promise(r => setTimeout(r, 100));
+await device.queue.onSubmittedWorkDone();
+const layoutErr = await device.popErrorScope();
+check('GPU layout + render has no validation errors', layoutErr === null, layoutErr?.message);
+
+let moved = 0;
+for (let i = 0; i < before.length; i++) if (Math.abs(graph.positions[i] - before[i]) > 1e-4) moved++;
+check('GPU layout moved the nodes (CPU copy updated)', moved > before.length * 0.5, `${moved}/${before.length} coords`);
+
+let finite = true;
+for (const v of graph.positions.subarray(0, graph.nodeSlots * 2)) if (!Number.isFinite(v)) finite = false;
+check('positions stay finite', finite);
+
+// After stop, the renderer draws the CPU positions again: they must match the GPU's
+device.pushErrorScope('validation');
+graph.setNodePosition(0, 0, 0);
+renderer.renderFrame(2000);
+await device.queue.onSubmittedWorkDone();
+const afterErr = await device.popErrorScope();
+check('rendering after the GPU layout has no validation errors', afterErr === null, afterErr?.message);
+
+layout.destroy();
 renderer.destroy();
 
 console.log(failures === 0 ? '\nGPU smoke test passed' : `\n${failures} check(s) failed`);

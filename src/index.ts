@@ -349,7 +349,8 @@ export class GraphGPU {
             return;
         }
 
-        this.gpuLayout = new GPUForceLayout(device, this.graph, opts);
+        // Shares the renderer's positions buffer: no per-frame copies
+        this.gpuLayout = new GPUForceLayout(device, this.graph, opts, this.renderer);
         await this.gpuLayout.start();
     }
 

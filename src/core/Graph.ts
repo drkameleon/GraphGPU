@@ -106,6 +106,12 @@ export class Graph {
     /** Bumped when edge colors change in bulk (e.g. palette switch) */
     edgeColorVersion: number = 0;
 
+    /**
+     * Position edits made while positions live on the GPU (GPU layout
+     * running): node id → [x, y]. null when not tracking.
+     */
+    private positionEdits: Map<NodeId, [number, number]> | null = null;
+
     // --- Default node size ---
     private defaultNodeSize: number;
 
@@ -191,6 +197,7 @@ export class Graph {
         const py = input.y ?? (Math.random() - 0.5) * 2;
         this.positions[id * 2] = px;
         this.positions[id * 2 + 1] = py;
+        this.positionEdits?.set(id, [px, py]);
 
         // Size
         this.sizes[id] = input.size ?? this.defaultNodeSize;
@@ -288,8 +295,33 @@ export class Graph {
     setNodePosition(id: NodeId, x: number, y: number): void {
         this.positions[id * 2] = x;
         this.positions[id * 2 + 1] = y;
+        this.positionEdits?.set(id, [x, y]);
         this.dirtyNodes = true;
         this.dirtyEdges = true;  // edges reference node positions
+    }
+
+    // --- Position edits (while positions live on the GPU) ---
+
+    /** Start/stop recording position edits */
+    trackPositionEdits(enabled: boolean): void {
+        this.positionEdits = enabled ? new Map() : null;
+    }
+
+    /** Take (and clear) the recorded position edits */
+    takePositionEdits(): [NodeId, [number, number]][] {
+        if (!this.positionEdits || this.positionEdits.size === 0) return [];
+        const edits = [...this.positionEdits];
+        this.positionEdits.clear();
+        return edits;
+    }
+
+    /** Re-apply pending edits over positions read back from the GPU */
+    reapplyPositionEdits(): void {
+        if (!this.positionEdits) return;
+        for (const [id, [x, y]] of this.positionEdits) {
+            this.positions[id * 2] = x;
+            this.positions[id * 2 + 1] = y;
+        }
     }
 
     /** Update node color */
@@ -578,8 +610,11 @@ export class Graph {
     /** Re-randomize positions of all active nodes (for layout restart) */
     resetPositions(): void {
         for (const id of this.activeNodeIds()) {
-            this.positions[id * 2] = (Math.random() - 0.5) * 2;
-            this.positions[id * 2 + 1] = (Math.random() - 0.5) * 2;
+            const x = (Math.random() - 0.5) * 2;
+            const y = (Math.random() - 0.5) * 2;
+            this.positions[id * 2] = x;
+            this.positions[id * 2 + 1] = y;
+            this.positionEdits?.set(id, [x, y]);
         }
         this.dirtyNodes = true;
         this.dirtyEdges = true; // edges depend on node positions
