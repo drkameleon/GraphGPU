@@ -236,6 +236,16 @@ npm test            # single run
 npm run test:watch  # watch mode
 ```
 
+And the benchmarks:
+
+```bash
+npm run bench                       # run all benchmarks
+npm run bench -- --filter QuadTree  # run only matching ones
+npm run bench:compare -- main       # compare your changes against main
+```
+
+Every PR touching the library is benchmarked against its base branch in CI, and the comparison shows up in the run summary.
+
 <hr/>
 
 ### License
