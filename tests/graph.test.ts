@@ -5,6 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import { Graph } from '../src/core/Graph';
 import { parseColor } from '../src/utils/color';
+import { seededRandom } from './helpers';
 
 describe('Graph: nodes', () => {
     it('assigns sequential ids', () => {
@@ -251,6 +252,70 @@ describe('Graph: counts', () => {
         g.removeNode(b);
         expect(g.numNodes).toBe(1);
         expect(g.nodeSlots).toBe(1);
+    });
+
+    it('reuses freed slots without duplicates, in any removal order', () => {
+        const g = new Graph();
+        const rand = seededRandom(3);
+        for (let i = 0; i < 500; i++) g.addNode({ tag: 'n' });
+
+        // Remove a random half, in random order
+        const order = [...Array(500).keys()].sort(() => rand() - 0.5);
+        for (const id of order.slice(0, 250)) g.removeNode(id);
+        expect(g.numNodes).toBe(250);
+
+        // Re-add: every new id must be distinct and fit the old slots
+        const added = new Set<number>();
+        for (let i = 0; i < 250; i++) added.add(g.addNode({ tag: 'm' }));
+        expect(added.size).toBe(250);
+        expect(g.numNodes).toBe(500);
+        expect(g.nodeSlots).toBe(500);
+        for (let i = 0; i < 500; i++) expect(g.isNodeActive(i)).toBe(true);
+    });
+
+    it('reuses ids sequentially after removing everything', () => {
+        const g = new Graph();
+        const rand = seededRandom(4);
+        for (let i = 0; i < 100; i++) g.addNode({ tag: 'n' });
+        const order = [...Array(100).keys()].sort(() => rand() - 0.5);
+        for (const id of order) g.removeNode(id);
+        expect(g.nodeSlots).toBe(0);
+
+        // Stale free-list entries must not cause duplicates
+        const ids = Array.from({ length: 100 }, () => g.addNode({ tag: 'n' }));
+        expect(new Set(ids).size).toBe(100);
+        expect(Math.max(...ids)).toBe(99);
+    });
+
+    it('survives interleaved removals and additions', () => {
+        const g = new Graph();
+        const rand = seededRandom(5);
+        const live = new Set<number>();
+        for (let step = 0; step < 3000; step++) {
+            if (live.size > 0 && rand() < 0.45) {
+                const ids = [...live];
+                const id = ids[Math.floor(rand() * ids.length)];
+                g.removeNode(id);
+                live.delete(id);
+            } else {
+                const id = g.addNode({ tag: 'n' });
+                expect(live.has(id)).toBe(false);
+                live.add(id);
+            }
+        }
+        expect(g.numNodes).toBe(live.size);
+        for (const id of live) expect(g.isNodeActive(id)).toBe(true);
+    });
+
+    it('reuses edge slots without duplicates', () => {
+        const g = new Graph();
+        const a = g.addNode({ tag: 'n' });
+        const b = g.addNode({ tag: 'n' });
+        const edges = Array.from({ length: 50 }, () => g.addEdge({ tag: 'e', source: a, target: b }));
+        for (const e of edges.filter((_, i) => i % 3 === 0)) g.removeEdge(e);
+        const again = Array.from({ length: 17 }, () => g.addEdge({ tag: 'e', source: b, target: a }));
+        expect(new Set(again).size).toBe(17);
+        expect(g.numEdges).toBe(50);
     });
 
     it('resets counts on clear', () => {
