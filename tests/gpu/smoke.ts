@@ -222,6 +222,103 @@ const afterErr = await device.popErrorScope();
 check('rendering after the GPU layout has no validation errors', afterErr === null, afterErr?.message);
 
 layout.destroy();
+
+// -----------------------------------------------------------
+// Physics: one GPU step vs a plain CPU implementation
+// -----------------------------------------------------------
+// With velocity starting at 0 and no clamping, one step moves each
+// node by exactly F·dt², so the GPU's force per node can be read off
+// the position change and compared to the reference.
+
+{
+    const N = 400;
+    const P = { G: -0.25, L: 0.2, K: 0.06, C: 0.012, dt: 0.1 };
+    const pg = new Graph({ maxNodes: N, maxEdges: 1000 });
+    let seed = 7;
+    const rand = () => ((seed = (seed * 1103515245 + 12345) >>> 0) / 4294967296);
+    for (let i = 0; i < N; i++) pg.addNode({ tag: 'n', x: rand() * 2 - 1, y: rand() * 2 - 1 });
+    pg.setNodePosition(N - 1, pg.positions[(N - 2) * 2], pg.positions[(N - 2) * 2 + 1]); // coincident pair
+    for (let i = 1; i <= 150; i++) pg.addEdge({ tag: 'hub', source: 0, target: i }); // hub
+    for (let i = 0; i < 300; i++) {
+        pg.addEdge({ tag: 'r', source: Math.floor(rand() * N), target: Math.floor(rand() * N) });
+    }
+    pg.addEdge({ tag: 'loop', source: 5, target: 5 });                  // self-loop (ignored)
+    const removed = pg.addEdge({ tag: 'gone', source: 3, target: 4 });
+    pg.removeEdge(removed);
+
+    const x0 = Array.from(pg.positions.subarray(0, N * 2));
+
+    // CPU reference (same formulas as the shader)
+    const ref = new Float64Array(N * 2);
+    for (let i = 0; i < N; i++) {
+        let fx = 0, fy = 0;
+        for (let j = 0; j < N; j++) {
+            if (j === i) continue;
+            const dx = x0[i * 2] - x0[j * 2], dy = x0[i * 2 + 1] - x0[j * 2 + 1];
+            const d = Math.hypot(dx, dy);
+            if (d < 0.0001) continue; // coincident: direction is arbitrary, checked separately
+            const mag = P.G / (d * d);
+            fx -= (dx / d) * mag;
+            fy -= (dy / d) * mag;
+        }
+        const dc = Math.max(Math.hypot(x0[i * 2], x0[i * 2 + 1]), 0.0001);
+        fx += -x0[i * 2] * (P.C / dc);
+        fy += -x0[i * 2 + 1] * (P.C / dc);
+        ref[i * 2] = fx;
+        ref[i * 2 + 1] = fy;
+    }
+    for (const id of pg.activeEdgeIds()) {
+        const a = pg.edgeIndices[id * 2], b = pg.edgeIndices[id * 2 + 1];
+        if (a === b) continue;
+        const dx = x0[a * 2] - x0[b * 2], dy = x0[a * 2 + 1] - x0[b * 2 + 1];
+        const d = Math.max(Math.hypot(dx, dy), 0.0001);
+        const sf = P.K * (P.L - d) / d;
+        ref[a * 2] += dx * sf; ref[a * 2 + 1] += dy * sf;
+        ref[b * 2] -= dx * sf; ref[b * 2 + 1] -= dy * sf;
+    }
+
+    device.pushErrorScope('validation');
+    const physics = new GPUForceLayout(device, pg, {
+        gravitationalConstant: P.G, springLength: P.L, springConstant: P.K,
+        centralGravity: P.C, damping: 0, timestep: P.dt, maxVelocity: 1e9,
+    });
+    await physics.step(1);
+    const physicsErr = await device.popErrorScope();
+    check('GPU physics step has no validation errors', physicsErr === null, physicsErr?.message);
+
+    const gpuForce = (i: number, k: number) => (pg.positions[i * 2 + k] - x0[i * 2 + k]) / (P.dt * P.dt);
+    let worst = 0, worstId = -1;
+    for (let i = 0; i < N; i++) {
+        if (i === N - 2 || i === N - 1) continue; // coincident pair: has an extra push
+        const err = Math.hypot(gpuForce(i, 0) - ref[i * 2], gpuForce(i, 1) - ref[i * 2 + 1]);
+        const rel = err / Math.max(1e-3, Math.hypot(ref[i * 2], ref[i * 2 + 1]));
+        if (rel > worst) { worst = rel; worstId = i; }
+    }
+    check('GPU forces match the CPU reference', worst < 0.02, `worst relative error ${(worst * 100).toFixed(2)}% at node ${worstId}`);
+
+    // The hub's spring forces must all arrive (no lost updates)
+    const hubSprings = (() => {
+        let fx = 0, fy = 0;
+        for (let i = 1; i <= 150; i++) {
+            const dx = x0[0] - x0[i * 2], dy = x0[1] - x0[i * 2 + 1];
+            const d = Math.max(Math.hypot(dx, dy), 0.0001);
+            const sf = P.K * (P.L - d) / d;
+            fx += dx * sf; fy += dy * sf;
+        }
+        return Math.hypot(fx, fy);
+    })();
+    const hubErr = Math.hypot(gpuForce(0, 0) - ref[0], gpuForce(0, 1) - ref[1]) / Math.hypot(ref[0], ref[1]);
+    check('the hub gets all 150 spring forces', hubErr < 0.02, `error ${(hubErr * 100).toFixed(2)}%, spring total ${hubSprings.toFixed(3)}`);
+
+    const pair = Math.hypot(
+        pg.positions[(N - 2) * 2] - pg.positions[(N - 1) * 2],
+        pg.positions[(N - 2) * 2 + 1] - pg.positions[(N - 1) * 2 + 1],
+    );
+    check('coincident nodes are pushed apart', pair > 0 && Number.isFinite(pair), `distance ${pair.toExponential(2)}`);
+    physics.destroy();
+}
+
+// Destroys the device too, so it goes last
 renderer.destroy();
 
 console.log(failures === 0 ? '\nGPU smoke test passed' : `\n${failures} check(s) failed`);
