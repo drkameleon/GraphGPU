@@ -122,7 +122,10 @@ export class Camera {
         const w = maxX - minX;
         const h = maxY - minY;
         if (w === 0 && h === 0) {
-            this.reset();
+            // A single point: center on it, keep the zoom
+            this.x = minX;
+            this.y = minY;
+            this.dirty = true;
             return;
         }
 

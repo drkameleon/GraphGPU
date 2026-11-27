@@ -130,11 +130,12 @@ describe('Camera', () => {
         }
     });
 
-    it('resets when fitting a single point', () => {
+    it('centers on a single point, keeping the zoom', () => {
         const cam = new Camera(W, H);
         cam.setPosition(4, 4);
-        cam.fitBounds(1, 1, 1, 1);
-        expect(cam.getState()).toEqual({ x: 0, y: 0, zoom: 1, rotation: 0 });
+        cam.setZoom(3);
+        cam.fitBounds(1, 2, 1, 2);
+        expect(cam.getState()).toEqual({ x: 1, y: 2, zoom: 3, rotation: 0 });
     });
 
     it('builds the projection matrix lazily', () => {

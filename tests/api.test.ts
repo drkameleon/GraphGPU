@@ -194,6 +194,35 @@ describe('GraphGPU: selection', () => {
     });
 });
 
+describe('GraphGPU: fitView', () => {
+    it('centers on a lone node instead of jumping to the origin', () => {
+        g.clear();
+        g.put('n', { name: 'a' }, { x: 0.5, y: -0.3 });
+        g.fitView();
+        const view = g.getView();
+        expect(view.x).toBeCloseTo(0.5);
+        expect(view.y).toBeCloseTo(-0.3);
+    });
+
+    it('keeps whole nodes in view, not just their centers', () => {
+        g.clear();
+        g.put('n', { name: 'a' }, { x: -1, y: 0, size: 20 });
+        g.put('n', { name: 'b' }, { x: 1, y: 0, size: 20 });
+        g.fitView(0);
+        const camera = (g as unknown as { camera: { worldToScreen(x: number, y: number): [number, number] } }).camera;
+        const r = 20 * 6 * 0.01;
+        const [left] = camera.worldToScreen(-1 - r, 0);
+        const [right] = camera.worldToScreen(1 + r, 0);
+        expect(left).toBeGreaterThanOrEqual(-1e-6);
+        expect(right).toBeLessThanOrEqual(canvas.width + 1e-6);
+        // Tall enough to be height-bound: the node tops touch the edges
+        const [, top] = camera.worldToScreen(0, r);
+        const [, bottom] = camera.worldToScreen(0, -r);
+        expect(top).toBeCloseTo(0, 3);
+        expect(bottom).toBeCloseTo(canvas.height, 3);
+    });
+});
+
 describe('GraphGPU: palette', () => {
     it('keeps explicit node colors when switching palettes', () => {
         const red = g.put('custom', 'Red', {}, { color: '#ff0000' });
