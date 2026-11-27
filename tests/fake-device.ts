@@ -19,6 +19,8 @@ export const gpu = {
     renderPasses: 0,
     /** Draw calls: [vertexCount, instanceCount] */
     draws: [] as [number, number][],
+    /** queue.writeBuffer calls: target buffer & byte count */
+    writes: [] as { buffer: FakeBuffer; bytes: number }[],
 };
 
 export function releaseMaps(): void {
@@ -136,6 +138,7 @@ export function fakeDevice(): GPUDevice {
                     return;
                 }
                 new Uint8Array(buf.data, offset, n).set(src.subarray(start, start + n));
+                gpu.writes.push({ buffer: buf, bytes: n });
             },
             submit(cmds: FakeCommands[]) {
                 for (const cmd of cmds) {
@@ -187,4 +190,5 @@ export function resetGPU(): void {
     gpu.pendingMaps = [];
     gpu.renderPasses = 0;
     gpu.draws = [];
+    gpu.writes = [];
 }

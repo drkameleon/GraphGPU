@@ -5,7 +5,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { GraphGPU } from '../src/index';
-import { gpu, installFakeWebGPU, installFakeFrames, flushFrames, pendingFrames } from './fake-gpu';
+import { gpu, installFakeWebGPU, installFakeFrames, flushFrames, pendingFrames, FakeBuffer } from './fake-gpu';
 
 let canvas: HTMLCanvasElement;
 let g: GraphGPU;
@@ -109,5 +109,56 @@ describe('Renderer: render on demand', () => {
         expect(pendingFrames()).toBe(0);
         g.resume();
         expect(await framesDrawn(1)).toBe(1);
+    });
+});
+
+describe('Renderer: edges', () => {
+    // Edge instances are 12 bytes: src, tgt, packed color
+    const edgeWrites = () => gpu.writes.filter(w => w.bytes > 0 && w.bytes % 12 === 0 && w.bytes / 12 === g.getGraph().edgeSlots);
+    const edgeBuffer = () => edgeWrites().at(-1)?.buffer as FakeBuffer;
+
+    it('uploads 12 bytes per edge: endpoints and packed color', async () => {
+        await flushFrames(1);
+        const data = new Uint32Array(edgeBuffer().data, 0, 9 * 3);
+        const edge = g.getGraph().getEdge(3)!;
+        expect(data[3 * 3]).toBe(edge.source);
+        expect(data[3 * 3 + 1]).toBe(edge.target);
+        expect(data[3 * 3 + 2] >>> 24).toBe(255); // visible
+    });
+
+    it('does not re-upload edges when nodes move', async () => {
+        await flushFrames(1);
+        const before = edgeWrites().length;
+        g.getGraph().setNodePosition(0, 0.3, 0.3);
+        expect(await framesDrawn(1)).toBe(1);
+        g.startLayout({ minVelocity: 0 });
+        await flushFrames(5);
+        g.stopLayout();
+        expect(edgeWrites().length).toBe(before);
+    });
+
+    it('re-uploads edges when they change', async () => {
+        await flushFrames(1);
+        const count = () => gpu.writes.filter(w => w.buffer === edgeBuffer()).length;
+        let before = count();
+        g.link(0, 'e', 5);
+        await flushFrames(1);
+        expect(count()).toBe(before + 1);
+
+        before = count();
+        g.setPalette('vibrant');
+        await flushFrames(1);
+        expect(count()).toBe(before + 1);
+    });
+
+    it('hides removed edges instead of compacting', async () => {
+        await flushFrames(1);
+        const ids = g.edges(4).map(e => e.id);
+        g.unlink(ids[0]);
+        await flushFrames(1);
+        const data = new Uint32Array(edgeBuffer().data, 0, 9 * 3);
+        expect(data[ids[0] * 3 + 2] >>> 24).toBe(0); // alpha 0 → culled in shader
+        // Still one instance per slot
+        expect(gpu.draws.at(-2)).toEqual([6, 9]);
     });
 });
