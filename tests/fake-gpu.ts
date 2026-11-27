@@ -21,9 +21,15 @@ export function installFakeWebGPU(canvas?: HTMLCanvasElement): void {
     if (canvas) {
         vi.stubGlobal('navigator', { ...globalThis.navigator, gpu: fakeNavigatorGPU(fakeDevice()) });
         const context = fakeWebGPUContext();
+        // An own property (not vi.spyOn), so it composes with spies
+        // on the prototype instead of replacing them
         const original = canvas.getContext.bind(canvas);
-        vi.spyOn(canvas, 'getContext').mockImplementation(((type: string) =>
-            type === 'webgpu' ? context : original(type as '2d')) as typeof canvas.getContext);
+        Object.defineProperty(canvas, 'getContext', {
+            configurable: true,
+            value: ((type: string, ...args: unknown[]) =>
+                type === 'webgpu' ? context : (original as (...a: unknown[]) => unknown)(type, ...args)
+            ) as typeof canvas.getContext,
+        });
     }
 }
 
