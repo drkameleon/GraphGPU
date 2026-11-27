@@ -8,7 +8,7 @@
 
 import { Window } from 'happy-dom';
 import {
-    fakeDevice, WEBGPU_GLOBALS,
+    WEBGPU_GLOBALS,
     fakeNavigatorGPU, fakeWebGPUContext,
 } from '../tests/fake-device';
 
@@ -39,7 +39,7 @@ export function installBrowserEnv(): void {
     g.getComputedStyle = window.getComputedStyle.bind(window);
     for (const [name, value] of Object.entries(WEBGPU_GLOBALS)) g[name] = value;
     Object.defineProperty(globalThis, 'navigator', {
-        value: { gpu: fakeNavigatorGPU(fakeDevice()) },
+        value: { gpu: fakeNavigatorGPU() },
         configurable: true,
     });
 
