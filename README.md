@@ -77,10 +77,12 @@ setTimeout(() => g.fitView(), 2000);
 - **WebGPU-native rendering** — instanced draw calls, MSAA, SDF circles for nodes, anti-aliased edge quads
 - **Render on demand** — frames are only drawn when something changes: an idle graph costs nothing
 - **Physics** — gravitational repulsion, Hooke spring edges, central gravity, viscous damping
-- **Dual layout engines** — CPU force layout with Barnes-Hut O(n log n) repulsion, GPU compute shaders for large graphs (writing straight into the render buffers, no per-frame copies)
+- **Dual layout engines** — CPU force layout with Barnes-Hut O(n log n) repulsion (optionally in a Web Worker, off the main thread), GPU compute shaders for large graphs (writing straight into the render buffers, no per-frame copies)
+- **Static layouts** — circular and grid arrangements, grouped by tag and spaced by node size
 - **Animated mode** — live physics simulation with interactive drag (pinned nodes, elastic rebalancing)
 - **8 built-in palettes** — `default`, `vibrant`, `pastel`, `earthy`, `inferno`, `playful`, `viridis`, `rainbow`
-- **Full interactivity** — pan, zoom, drag, select, multi-select, hover (mouse, touch & pen), node & edge events, spatially indexed picking
+- **Full interactivity** — pan, zoom, drag, node & edge selection, multi-select, box selection, hover (mouse, touch & pen), node & edge events, spatially indexed picking
+- **Selection API** — select, deselect and read the selection from code, fit or focus the camera on it
 - **Canvas2D label overlay** — auto-sizing, truncation, contrast-adaptive text color
 - **Contrast-adaptive selection halos** — lighter ring on dark backgrounds, darker on light, always the node's own color
 - **Tag-based coloring** — nodes and edges auto-color by tag, palette-switchable at runtime
@@ -103,6 +105,19 @@ new GraphGPU({
     maxNodes?: number,          // initial capacity (grows automatically), default: 4096
     maxEdges?: number,          // initial capacity (grows automatically), default: 8192
     autoResize?: boolean,       // follow canvas size changes, default: true
+    edgeWidth?: number,         // fixed edge width in CSS px (default: scales with node size)
+    layout?: LayoutOptions,     // defaults for every layout, e.g. { type: 'force', useWorker: true }
+    interaction?: {             // all default to true, except lasso
+        pan?, zoom?, zoomRange?, dragNodes?, hover?, selection?, multiSelect?, lasso?,
+    },
+    labels?: {
+        enabled?: boolean,      // default: true
+        font?: string,          // CSS font family
+        color?: ColorInput,     // default: auto-contrast against the node
+        visibleAtZoom?: number, // hide labels below this zoom level
+        property?: string,      // node property to show (default: name, then title, then tag)
+        maxLength?: number,     // truncate with an ellipsis
+    },
     onWebGPUUnavailable?: () => void,
     onDeviceLost?: (info) => void,  // the renderer recovers by itself
 })
@@ -112,16 +127,23 @@ new GraphGPU({
 
 | Method | Description |
 |--------|-------------|
-| `put(tag, properties?)` | Add a node with a tag and optional properties |
+| `put(tag, properties?, opts?)` | Add a node with a tag and optional properties (`opts`: `x`, `y`, `size`, `color`) |
+| `putMany(tag, items)` | Add many nodes at once |
 | `link(source, tag, target)` | Add an edge (supports arrays for batch linking) |
 | `unput(nodeId)` | Remove a node and its connected edges |
 | `unlink(edgeId)` | Remove an edge |
+| `clear()` | Remove everything |
+| `fetch(tag, filter?)` | Nodes with a tag (optionally matching some properties) |
+| `what(nodeId)` | A node, with its tag and properties |
+| `related(nodeId)` / `edges(nodeId)` | A node's neighbors / edges |
+| `tags()` | All node tags |
+| `nodeCount` / `edgeCount` | Number of nodes / edges |
 
 #### Layout
 
 | Method | Description |
 |--------|-------------|
-| `startLayout(opts?)` | Start CPU force-directed layout |
+| `startLayout(opts?)` | Start CPU force-directed layout (`useWorker: true` runs it in a Web Worker) |
 | `stopLayout()` | Stop the running layout |
 | `stepLayout(n?)` | Run N layout steps synchronously (useful for pre-stabilization) |
 | `startGPULayout(opts?)` | Start GPU compute layout (falls back to CPU if unavailable); stops by itself once settled |
@@ -132,6 +154,7 @@ new GraphGPU({
 | `unpinNode(nodeId)` | Unpin a node (rejoin physics simulation) |
 | `fitView(padding?, nodes?)` | Fit camera to show all nodes (or just `nodes`, e.g. the selection) |
 | `focusNode(id, zoom?)` | Center the camera on a node, optionally zooming |
+| `setView(x, y, zoom?)` / `getView()` / `resetView()` | Set / read / reset the camera |
 | `resetPositions()` | Randomize all node positions |
 | `resize()` | Re-read the canvas size (automatic unless `autoResize: false`) |
 
@@ -163,7 +186,7 @@ new GraphGPU({
 
 #### Events
 
-`node:click` · `node:select` · `node:deselect` · `node:hover` · `node:hoverout` · `node:drag` · `node:dragstart` · `node:dragend` · `node:dblclick` · `edge:click` · `edge:hover` · `edge:hoverout` · `canvas:click` · `canvas:pan` · `canvas:zoom`
+`node:click` · `node:select` · `node:deselect` · `node:hover` · `node:hoverout` · `node:drag` · `node:dragstart` · `node:dragend` · `node:dblclick` · `edge:click` · `edge:select` · `edge:deselect` · `edge:hover` · `edge:hoverout` · `canvas:click` · `canvas:pan` · `canvas:zoom`
 
 `layout:start` · `layout:tick` (`{ iteration, energy }`) · `layout:stop` · `render:frame` (render stats: `fps`, `frameTime`, `nodeCount`, `edgeCount`, ...)
 
@@ -225,6 +248,7 @@ What keeps it fast, frame after frame:
 - **Moving nodes only uploads positions** (8 bytes per node); colors, sizes and selection only when they change
 - **The GPU layout writes into that same buffer**: no per-frame copies between GPU and CPU, and frames never wait on the GPU (the CPU copy, for picking and labels, is refreshed in the background)
 - **Labels** are culled, measured once and overlap-tested through a spatial grid, with no per-frame allocations
+- **The CPU layout can run in a Web Worker**: the positions buffer is handed back and forth (transferred, not copied) once per frame
 - **Picking** goes through a spatial grid, rebuilt only when nodes change
 - **Graph edits** are O(1) (removing a node: O(degree)); the adjacency index is built on demand
 
@@ -233,7 +257,7 @@ Every PR is benchmarked against its base in CI (CPU-side costs, with a fake GPU 
 | | before | after |
 |---|---:|---:|
 | Frame after nodes moved (100k nodes / 200k edges) | 2.86 ms | 24 µs |
-| Label overlay (10k nodes / 20k edges) | 141 ms | 18 ms |
+| Label overlay (10k nodes / 20k edges) | 141 ms | 10 ms |
 | Removing 2k of 4k nodes | 85 ms | 1.1 ms |
 | 1000 hit tests (100k nodes) | 1.17 s | 14 ms |
 
@@ -273,8 +297,12 @@ src/
         SpatialIndex.ts   # Uniform grid for node picking
     layout/
         ForceLayout.ts    # CPU force-directed layout (Barnes-Hut)
+        WorkerForceLayout.ts # The CPU layout in a Web Worker (main thread side)
+        ForceWorker.ts    # ...and the worker side
         GPUForceLayout.ts # GPU compute force layout (2 passes per step, shared buffers)
         QuadTree.ts       # Barnes-Hut quadtree for O(n log n) repulsion
+        StaticLayouts.ts  # Circular and grid layouts
+        options.ts        # Layout option merging (defaults, legacy names)
     utils/
         color.ts          # Color parsing (hex, rgb)
         palette.ts        # 8 built-in color palettes
