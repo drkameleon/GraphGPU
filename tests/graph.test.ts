@@ -207,6 +207,30 @@ describe('Graph: edges', () => {
     });
 });
 
+describe('Graph: empty tags', () => {
+    it('treats a node with an empty tag as a normal node', () => {
+        const g = new Graph();
+        const a = g.addNode({ tag: '', properties: { name: 'x' } });
+        expect(g.isNodeActive(a)).toBe(true);
+        expect(g.getNode(a)).not.toBeNull();
+        expect(g.getNode(a)!.tag).toBe('');
+        expect(g.fetchByTag('')).toHaveLength(1);
+        expect(g.getAllTags()).toEqual(['']);
+        expect(g.getRelatedNodes(a)).toEqual([]);
+    });
+
+    it('treats an edge with an empty tag as a normal edge', () => {
+        const g = new Graph();
+        const a = g.addNode({ tag: 'n' });
+        const b = g.addNode({ tag: 'n' });
+        const e = g.addEdge({ tag: '', source: a, target: b });
+        expect(g.isEdgeActive(e)).toBe(true);
+        expect(g.getEdge(e)).not.toBeNull();
+        expect(g.getNodeEdges(a)).toHaveLength(1);
+        expect(g.getRelatedNodes(a).map(n => n.id)).toEqual([b]);
+    });
+});
+
 describe('Graph: counts', () => {
     it('counts only live nodes and edges', () => {
         const g = new Graph();
