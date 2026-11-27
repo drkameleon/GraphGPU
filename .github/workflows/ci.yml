@@ -40,6 +40,7 @@ jobs:
               run: |
                   npx tsc --noEmit
                   npx tsc -p tests
+                  npx tsc -p bench
 
             - name: Run tests
               run: npm test

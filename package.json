@@ -24,11 +24,16 @@
     "dev": "tsc --watch",
     "test": "vitest run",
     "test:watch": "vitest",
+    "bench": "tsx bench/run.ts",
+    "bench:compare": "bash bench/ab.sh",
     "clean": "rm -rf dist",
     "prepublishOnly": "npm run clean && npm run build"
   },
   "devDependencies": {
+    "@types/node": "^24.19.4",
     "@webgpu/types": "^0.1.40",
+    "tinybench": "^6.2.5",
+    "tsx": "^4.23.15",
     "typescript": "^5.4.0",
     "vitest": "^5.1.2"
   },
