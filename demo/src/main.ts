@@ -5,6 +5,25 @@
 import { GraphGPU } from 'graphgpu';
 import type { Node, NodeId } from 'graphgpu';
 
+// ============================================================
+// Stress test config (URL: ?nodes=100000&edges=300000&layout=gpu)
+// ============================================================
+
+const params = new URLSearchParams(window.location.search);
+
+function intParam(name: string, fallback: number, max: number): number {
+    const v = parseInt(params.get(name) ?? '', 10);
+    return Number.isFinite(v) && v > 0 ? Math.min(v, max) : fallback;
+}
+
+const STRESS_NODES = intParam('nodes', 500, 2_000_000);
+const STRESS = {
+    nodes: STRESS_NODES,
+    edges: intParam('edges', STRESS_NODES * 3, 10_000_000),
+    layout: params.get('layout') === 'gpu' ? 'gpu' as const : 'cpu' as const,
+    fromUrl: params.has('nodes') || params.has('edges'),
+};
+
 const { createApp, ref, reactive, computed, onMounted } = Vue;
 
 // ── Types ──
@@ -31,6 +50,7 @@ interface SettingsModalState {
     nodeSize: number;
     edgeOpacity: number;
     showLabels: boolean;
+    showFps: boolean;
     gravitationalConstant: number;
     springLength: number;
     springConstant: number;
@@ -52,6 +72,7 @@ const DEFAULT_SETTINGS: Omit<SettingsModalState, 'open'> = {
     nodeSize: 8,
     edgeOpacity: 0.8,
     showLabels: true,
+    showFps: false,
     gravitationalConstant: -0.25,
     springLength: 0.2,
     springConstant: 0.06,
@@ -113,6 +134,10 @@ createApp({
         // Legend
         const legendItems = ref<LegendItem[]>([]);
         const tagColorCache: Record<string, string> = {};
+
+        // FPS display
+        const fpsDisplay = reactive({ fps: 0, nodes: 0, edges: 0 });
+        let fpsInterval: number | null = null;
 
         // Computed
         const hasSelection = computed(() => selectedNode.value !== null);
@@ -279,6 +304,19 @@ createApp({
             if (key === 'showLabels') {
                 settingsModal.showLabels = !settingsModal.showLabels;
                 g?.setLabelsVisible(settingsModal.showLabels);
+            } else if (key === 'showFps') {
+                settingsModal.showFps = !settingsModal.showFps;
+                if (settingsModal.showFps) {
+                    fpsInterval = window.setInterval(() => {
+                        if (!g) return;
+                        fpsDisplay.fps = g.getFps();
+                        fpsDisplay.nodes = g.nodeCount;
+                        fpsDisplay.edges = g.edgeCount;
+                    }, 250);
+                } else if (fpsInterval !== null) {
+                    clearInterval(fpsInterval);
+                    fpsInterval = null;
+                }
             }
         }
 
@@ -288,10 +326,63 @@ createApp({
             g.setNodeSize(DEFAULT_SETTINGS.nodeSize);
             g.setEdgeOpacity(DEFAULT_SETTINGS.edgeOpacity);
             g.setLabelsVisible(DEFAULT_SETTINGS.showLabels);
+            if (fpsInterval !== null) {
+                clearInterval(fpsInterval);
+                fpsInterval = null;
+            }
             if (layoutRunning.value) {
                 g.stopLayout();
                 g.startLayout(getPhysicsOpts());
             }
+        }
+
+        // ── Stress Test ──
+        // Configurable via URL, e.g. ?nodes=100000&edges=300000&layout=gpu
+
+        async function stressTest(): Promise<void> {
+            if (!g) return;
+            const { nodes: N, edges: E, layout } = STRESS;
+
+            g.stopLayout();
+            g.clear();
+
+            // Smaller nodes (and no labels) for big graphs
+            const nodeSize = N > 5000 ? 2 : 4;
+            g.setNodeSize(nodeSize);
+            settingsModal.nodeSize = nodeSize;
+            g.setLabelsVisible(N <= 2000 && settingsModal.showLabels);
+
+            const tags = ['alpha', 'beta', 'gamma', 'delta', 'epsilon'];
+            const edgeTags = ['connects', 'links', 'references', 'depends'];
+
+            for (let i = 0; i < N; i++) {
+                const tag = tags[i % tags.length];
+                g.put(tag, { name: `${tag}-${i}` });
+            }
+            for (let i = 0; i < E; i++) {
+                const src = Math.floor(Math.random() * N);
+                let tgt = Math.floor(Math.random() * N);
+                if (src === tgt) tgt = (src + 1) % N;
+                g.link(src, edgeTags[i % edgeTags.length], tgt);
+            }
+
+            // Light pre-stabilization for small graphs (it blocks)
+            if (layout === 'cpu' && N <= 2000) {
+                for (let i = 0; i < 50; i++) g.stepLayout(3);
+            }
+            g.fitView(0.15);
+
+            if (layout === 'gpu') await g.startGPULayout(getPhysicsOpts());
+            else g.startLayout(getPhysicsOpts());
+            layoutRunning.value = true;
+            setTimeout(() => g!.fitView(0.15), 500);
+            setTimeout(() => g!.fitView(0.15), 2000);
+
+            updateCounts();
+            refreshLegend();
+
+            // Auto-enable FPS display
+            if (!settingsModal.showFps) onToggleSetting('showFps');
         }
 
         // ── Init ──
@@ -323,6 +414,13 @@ createApp({
             graph.tagColors.setColor('country', '#6bcb77');
             graph.tagColors.setColor('book', '#4d96ff');
 
+            // ── Stress test straight from the URL (?nodes=&edges=&layout=) ──
+            if (STRESS.fromUrl) {
+                await stressTest();
+                bindEvents();
+                return;
+            }
+
             // ── Populate ──
             populateGraph(g);
 
@@ -340,6 +438,12 @@ createApp({
             setTimeout(() => g!.fitView(0.15), 800);
             updateCounts();
             refreshLegend();
+
+            bindEvents();
+        });
+
+        function bindEvents(): void {
+            if (!g) return;
 
             // ── Events ──
             g.on('node:hover', (e: { target: Node }) => {
@@ -375,6 +479,7 @@ createApp({
                 selectedNodeId.value = null;
             });
 
+            const canvas = document.getElementById('graph-canvas') as HTMLCanvasElement;
             canvas.addEventListener('mousemove', (e: MouseEvent) => {
                 tooltipStyle.value = {
                     left: `${e.clientX + 14}px`,
@@ -386,11 +491,11 @@ createApp({
 
             // Console access
             (window as any).g = g;
-        });
+        }
 
         return {
             darkMode, layoutRunning, animatedEnabled, activePalette,
-            nodeCount, edgeCount,
+            nodeCount, edgeCount, fpsDisplay,
             selectedNode, selectedNodeColor, hoveredNode, hoveredNodeColor,
             hasSelection,
             tooltipVisible, tooltipStyle, tooltipTag, tooltipName, tooltipProps, tooltipColor,
@@ -399,7 +504,7 @@ createApp({
             toggleLayout, fitView, resetGraph, toggleAnimated, toggleDarkMode,
             switchPalette, getPalettePreview,
             showEditModal, saveEdit, deleteSelected, confirmDelete,
-            onSettingChange, onToggleSetting, resetSettings,
+            onSettingChange, onToggleSetting, resetSettings, stressTest,
         };
     },
 }).mount('#app');

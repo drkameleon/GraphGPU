@@ -491,6 +491,13 @@ export class GraphGPU {
         this.renderer.setLabelsVisible(visible);
     }
 
+    /**
+     * Get current frames per second.
+     */
+    getFps(): number {
+        return this.renderer.getFps();
+    }
+
     // =========================================================
     // Selection
     // =========================================================

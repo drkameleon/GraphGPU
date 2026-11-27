@@ -92,6 +92,7 @@ export class Renderer implements PositionTarget {
     // Render on demand: frames are only drawn when something changed
     private needsRender: boolean = true;
     private renderedFrames: number = 0;
+    private lastRenderAt: number = -Infinity;
     private onFontsLoaded = () => this.invalidate();
 
     constructor(
@@ -496,6 +497,7 @@ export class Renderer implements PositionTarget {
 
         this.needsRender = false;
         this.renderedFrames++;
+        this.lastRenderAt = performance.now();
 
         const t = timestamp / 1000;
 
@@ -724,6 +726,14 @@ export class Renderer implements PositionTarget {
     setLabelsVisible(visible: boolean): void {
         this.invalidate();
         this.labelsVisible = visible;
+    }
+
+    /**
+     * Frames per second actually drawn. Frames are only drawn when
+     * something changes, so an idle graph reports 0.
+     */
+    getFps(): number {
+        return performance.now() - this.lastRenderAt > 1000 ? 0 : this.currentFps;
     }
 
     /** Set selection state for a node (1.0 = selected, 0.0 = not) */
