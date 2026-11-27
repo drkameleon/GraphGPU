@@ -590,6 +590,14 @@ export class GraphGPU {
     }
 
     /**
+     * Request a redraw. Frames are only drawn when something changed;
+     * call this after changing anything the library can't detect.
+     */
+    requestRender(): void {
+        this.renderer.invalidate();
+    }
+
+    /**
      * Access the underlying Graph object.
      */
     getGraph(): Graph {

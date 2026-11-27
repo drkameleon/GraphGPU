@@ -78,6 +78,11 @@ export class Renderer {
     private animationId: number = 0;
     private labelsVisible: boolean = true;
 
+    // Render on demand: frames are only drawn when something changed
+    private needsRender: boolean = true;
+    private renderedFrames: number = 0;
+    private onFontsLoaded = () => this.invalidate();
+
     constructor(
         private graph: Graph,
         private options: GraphGPUOptions,
@@ -144,6 +149,7 @@ export class Renderer {
 
     /** Resize canvas to match container */
     resizeCanvas(): void {
+        this.invalidate();
         const rect = this.canvas.getBoundingClientRect();
         this.canvas.width = rect.width * this.pixelRatio;
         this.canvas.height = rect.height * this.pixelRatio;
@@ -431,6 +437,9 @@ export class Renderer {
             return this.emptyStats();
         }
 
+        this.needsRender = false;
+        this.renderedFrames++;
+
         const t = timestamp / 1000;
 
         // Update camera matrix
@@ -547,11 +556,34 @@ export class Renderer {
 
     /** Start the render loop */
     start(): void {
+        if (this.animationId) return; // already running
         const loop = (ts: number) => {
-            this.renderFrame(ts);
+            // Skip the frame entirely (no GPU work, no label pass)
+            // unless something changed since the last one
+            if (this.isDirty()) this.renderFrame(ts);
             this.animationId = requestAnimationFrame(loop);
         };
+        this.invalidate();
         this.animationId = requestAnimationFrame(loop);
+    }
+
+    /** Force the next frame to be drawn */
+    invalidate(): void {
+        this.needsRender = true;
+    }
+
+    /** Whether anything changed since the last drawn frame */
+    isDirty(): boolean {
+        return this.needsRender ||
+            this.camera.dirty ||
+            this.graph.dirtyNodes ||
+            this.graph.dirtyEdges ||
+            this.selectionDirty;
+    }
+
+    /** Number of frames actually drawn so far */
+    getRenderedFrames(): number {
+        return this.renderedFrames;
     }
 
     /** Stop the render loop */
@@ -569,21 +601,25 @@ export class Renderer {
 
     /** Change background color at runtime */
     setBackground(color: [number, number, number, number]): void {
+        this.invalidate();
         this.backgroundColor = color;
     }
 
     /** Change node scale at runtime */
     setNodeScale(scale: number): void {
+        this.invalidate();
         this.nodeScale = scale;
     }
 
     /** Change edge opacity at runtime */
     setEdgeOpacity(opacity: number): void {
+        this.invalidate();
         this.edgeOpacity = opacity;
     }
 
     /** Show or hide all labels (node + edge) */
     setLabelsVisible(visible: boolean): void {
+        this.invalidate();
         this.labelsVisible = visible;
     }
 
@@ -606,6 +642,8 @@ export class Renderer {
 
     /** Initialize overlay canvases */
     initLabelOverlay(): void {
+        // Labels drawn before a web font loads must be redrawn after
+        document.fonts?.addEventListener?.('loadingdone', this.onFontsLoaded);
         // Label canvas: sits IN FRONT of the WebGPU canvas
         this.labelCanvas = document.createElement('canvas');
         this.labelCanvas.style.cssText =
@@ -825,6 +863,7 @@ export class Renderer {
     /** Clean up all GPU resources */
     destroy(): void {
         this.stop();
+        document.fonts?.removeEventListener?.('loadingdone', this.onFontsLoaded);
         this.gpuPositions?.destroy();
         this.gpuColors?.destroy();
         this.gpuSizes?.destroy();
