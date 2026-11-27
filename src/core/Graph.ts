@@ -87,7 +87,10 @@ export class Graph {
 
     // --- Adjacency index: nodeId → Set of edgeIds ---
     // Avoids O(edges) scan when removing a node's edges
-    private nodeAdj: Map<NodeId, Set<EdgeId>> = new Map();
+    // Built lazily (on first need) and maintained from then on, so
+    // bulk-adding edges stays cheap. null = not built yet.
+    // node id → its edge ids (plain arrays: much cheaper to build than Sets)
+    private nodeAdj: (EdgeId[] | undefined)[] | null = null;
 
     // --- Color management ---
     readonly tagColors: TagColorMap;
@@ -417,8 +420,10 @@ export class Graph {
         }
 
         // Update adjacency index
-        this.adjAdd(input.source, id);
-        this.adjAdd(input.target, id);
+        if (this.nodeAdj) {
+            this.adjAdd(input.source, id);
+            if (input.target !== input.source) this.adjAdd(input.target, id);
+        }
 
         this.dirtyEdges = true;
         return id;
@@ -441,8 +446,10 @@ export class Graph {
         // Clean adjacency index before zeroing
         const src = this.edgeIndices[id * 2];
         const tgt = this.edgeIndices[id * 2 + 1];
-        this.adjRemove(src, id);
-        this.adjRemove(tgt, id);
+        if (this.nodeAdj) {
+            this.adjRemove(src, id);
+            if (tgt !== src) this.adjRemove(tgt, id);
+        }
 
         this.edgeIndices[id * 2] = 0;
         this.edgeIndices[id * 2 + 1] = 0;
@@ -464,33 +471,49 @@ export class Graph {
 
     /** Remove all edges connected to a node — O(degree) via adjacency index */
     removeNodeEdges(nodeId: NodeId): void {
-        const adj = this.nodeAdj.get(nodeId);
-        if (!adj) return;
-        // Copy to array because removeEdge mutates the set
-        const edgeIds = [...adj];
+        const index = this.adjacency();
+        const edgeIds = index[nodeId];
+        if (!edgeIds) return;
+        // Detach the node's own list first, so each removal only has to
+        // update the other endpoint's list (no O(degree²) for hubs)
+        index[nodeId] = undefined;
         for (const eid of edgeIds) {
             this.removeEdge(eid);
         }
-        this.nodeAdj.delete(nodeId);
     }
 
     // --- Adjacency index helpers ---
 
-    private adjAdd(nodeId: NodeId, edgeId: EdgeId): void {
-        let set = this.nodeAdj.get(nodeId);
-        if (!set) {
-            set = new Set();
-            this.nodeAdj.set(nodeId, set);
+    /** The adjacency index, built on first use: O(edges) once */
+    private adjacency(): (EdgeId[] | undefined)[] {
+        if (!this.nodeAdj) {
+            this.nodeAdj = [];
+            for (let id = 0; id < this.edgeCount; id++) {
+                if (this.edgeTags[id] === undefined) continue;
+                const a = this.edgeIndices[id * 2];
+                const b = this.edgeIndices[id * 2 + 1];
+                this.adjAdd(a, id);
+                if (b !== a) this.adjAdd(b, id);
+            }
         }
-        set.add(edgeId);
+        return this.nodeAdj;
+    }
+
+    private adjAdd(nodeId: NodeId, edgeId: EdgeId): void {
+        const list = this.nodeAdj![nodeId];
+        if (list) list.push(edgeId);
+        else this.nodeAdj![nodeId] = [edgeId];
     }
 
     private adjRemove(nodeId: NodeId, edgeId: EdgeId): void {
-        const set = this.nodeAdj.get(nodeId);
-        if (set) {
-            set.delete(edgeId);
-            if (set.size === 0) this.nodeAdj.delete(nodeId);
-        }
+        const list = this.nodeAdj![nodeId];
+        if (!list) return;
+        const i = list.lastIndexOf(edgeId);
+        if (i < 0) return;
+        // Swap-remove (order doesn't matter, queries sort)
+        list[i] = list[list.length - 1];
+        list.pop();
+        if (list.length === 0) this.nodeAdj![nodeId] = undefined;
     }
 
     /** Get an edge view */
@@ -537,24 +560,20 @@ export class Graph {
     }
 
     /** Get all edges for a given node */
-    getNodeEdges(nodeId: NodeId): Edge[] {
-        const results: Edge[] = [];
-        for (let i = 0; i < this.edgeCount; i++) {
-            if (this.edgeTags[i] === undefined) continue;
-            const src = this.edgeIndices[i * 2];
-            const tgt = this.edgeIndices[i * 2 + 1];
-            if (src === nodeId || tgt === nodeId) {
-                results.push(this.getEdge(i)!);
-            }
-        }
-        return results;
+    /** Ids of a node's edges, in ascending order — O(degree) */
+    getNodeEdgeIds(nodeId: NodeId): EdgeId[] {
+        const list = this.adjacency()[nodeId];
+        return list ? list.slice().sort((a, b) => a - b) : [];
     }
 
-    /** Get all related nodes (neighbors) for a given node */
+    getNodeEdges(nodeId: NodeId): Edge[] {
+        return this.getNodeEdgeIds(nodeId).map(id => this.getEdge(id)!);
+    }
+
+    /** Get all related nodes (neighbors) for a given node — O(degree) */
     getRelatedNodes(nodeId: NodeId): Node[] {
         const neighborIds = new Set<NodeId>();
-        for (let i = 0; i < this.edgeCount; i++) {
-            if (this.edgeTags[i] === undefined) continue;
+        for (const i of this.getNodeEdgeIds(nodeId)) {
             const src = this.edgeIndices[i * 2];
             const tgt = this.edgeIndices[i * 2 + 1];
             if (src === nodeId) neighborIds.add(tgt);
@@ -604,7 +623,7 @@ export class Graph {
         this.edgeIndices.fill(0);
         this.edgeWeights.fill(0);
         this.edgeColors.fill(0);
-        this.nodeAdj.clear();
+        this.nodeAdj = null;
         this.nodeTags.length = 0;
         this.nodeProperties.length = 0;
         this.edgeTags.length = 0;
