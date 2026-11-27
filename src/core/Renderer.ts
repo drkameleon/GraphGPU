@@ -301,8 +301,8 @@ export class Renderer {
     // =========================================================
 
     private allocateBuffers(): void {
-        this.reallocNodeBuffers(this.graph.numNodes || 256);
-        this.reallocEdgeBuffers(this.graph.numEdges || 512);
+        this.reallocNodeBuffers(this.graph.nodeSlots || 256);
+        this.reallocEdgeBuffers(this.graph.edgeSlots || 512);
     }
 
     private reallocNodeBuffers(capacity: number): void {
@@ -343,7 +343,7 @@ export class Renderer {
     }
 
     private uploadNodeData(): void {
-        const n = this.graph.numNodes;
+        const n = this.graph.nodeSlots;
         if (n > this.gpuNodeCapacity) {
             this.reallocNodeBuffers(n * 2);
         }
@@ -380,7 +380,7 @@ export class Renderer {
     private lastVisibleEdges: number = 0;
 
     private uploadEdgeData(): void {
-        const edgeCount = this.graph.numEdges;
+        const edgeCount = this.graph.edgeSlots;
         if (edgeCount > this.gpuEdgeCapacity) {
             this.reallocEdgeBuffers(edgeCount * 2);
         }
@@ -503,7 +503,7 @@ export class Renderer {
         }
 
         // Draw nodes
-        const nodeCount = this.graph.numNodes;
+        const nodeCount = this.graph.nodeSlots;
         if (nodeCount > 0) {
             pass.setPipeline(this.nodePipeline);
             pass.setBindGroup(0, this.nodeBindGroup);
@@ -538,9 +538,9 @@ export class Renderer {
         return {
             fps: this.currentFps,
             frameTime: 0,
-            nodeCount,
+            nodeCount: this.graph.numNodes,
             edgeCount: this.graph.numEdges,
-            visibleNodes: nodeCount,
+            visibleNodes: this.graph.numNodes,
             visibleEdges,
         };
     }
@@ -591,7 +591,7 @@ export class Renderer {
     setSelection(nodeId: number, selected: boolean): void {
         if (this.selectionData.length <= nodeId) {
             const old = this.selectionData;
-            this.selectionData = new Float32Array(Math.max(nodeId + 1, this.graph.numNodes));
+            this.selectionData = new Float32Array(Math.max(nodeId + 1, this.graph.nodeSlots));
             this.selectionData.set(old);
         }
         this.selectionData[nodeId] = selected ? 1.0 : 0.0;

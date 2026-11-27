@@ -177,7 +177,7 @@ describe('ForceLayout: physics', () => {
         for (let i = 0; i < 50; i++) g.addNode({ tag: 'late', x: i / 100, y: 0.3 });
 
         expect(() => layout.step(5)).not.toThrow();
-        for (const v of g.positions.subarray(0, g.numNodes * 2)) {
+        for (const v of g.positions.subarray(0, g.nodeSlots * 2)) {
             expect(Number.isFinite(v)).toBe(true);
         }
     });
@@ -256,7 +256,7 @@ describe('ForceLayout: run loop', () => {
         for (let i = 0; i < 100; i++) g.addNode({ tag: 'late', x: i / 200, y: -0.1 });
         expect(() => flushFrames(5)).not.toThrow();
         expect(layout.isRunning()).toBe(true);
-        for (const v of g.positions.subarray(0, g.numNodes * 2)) {
+        for (const v of g.positions.subarray(0, g.nodeSlots * 2)) {
             expect(Number.isFinite(v)).toBe(true);
         }
         layout.stop();
