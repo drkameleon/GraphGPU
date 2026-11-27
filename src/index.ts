@@ -100,6 +100,14 @@ export class GraphGPU {
         this.controls.on('canvas:click', () => {
             this.renderer.clearSelection();
         });
+        this.controls.on('edge:select', (e) => {
+            const edge = e.target as Edge | null;
+            if (edge) this.renderer.setEdgeSelection(edge.id, true);
+        });
+        this.controls.on('edge:deselect', (e) => {
+            const edge = e.target as { id: number } | null;
+            if (edge) this.renderer.setEdgeSelection(edge.id, false);
+        });
 
         // Start render loop
         this.renderer.start();
@@ -550,7 +558,10 @@ export class GraphGPU {
      */
     setSelectionEnabled(enabled: boolean): void {
         this.controls.setSelectionEnabled(enabled);
-        if (!enabled) this.renderer.clearSelection();
+        if (!enabled) {
+            this.renderer.clearSelection();
+            this.renderer.clearEdgeSelection();
+        }
     }
 
     /**

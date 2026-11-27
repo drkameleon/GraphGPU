@@ -412,3 +412,29 @@ describe('Renderer: robustness', () => {
         c.remove();
     });
 });
+
+describe('Renderer: edge selection', () => {
+    it('marks selected edges with a 4-byte patch, not a full re-upload', async () => {
+        await flushFrames(1);
+        const renderer = (g as unknown as { renderer: { setEdgeSelection(id: number, on: boolean): void; gpuEdges: FakeBuffer } }).renderer;
+        const before = gpu.writes.length;
+        renderer.setEdgeSelection(3, true);
+        const writes = gpu.writes.slice(before);
+        expect(writes).toEqual([{ buffer: renderer.gpuEdges, bytes: 4 }]);
+        const words = new Uint32Array(renderer.gpuEdges.data, 0, 9 * 3);
+        expect(words[3 * 3 + 2] >>> 24).toBe(128);
+        expect(await framesDrawn(1)).toBe(1);
+
+        renderer.setEdgeSelection(3, false);
+        expect(new Uint32Array(renderer.gpuEdges.data, 0, 9 * 3)[3 * 3 + 2] >>> 24).toBe(255);
+    });
+
+    it('keeps the selection across full edge uploads', async () => {
+        await flushFrames(1);
+        const renderer = (g as unknown as { renderer: { setEdgeSelection(id: number, on: boolean): void; gpuEdges: FakeBuffer } }).renderer;
+        renderer.setEdgeSelection(2, true);
+        g.link(0, 'e', 7); // structure change: full re-upload
+        await flushFrames(1);
+        expect(new Uint32Array(renderer.gpuEdges.data, 0, 10 * 3)[2 * 3 + 2] >>> 24).toBe(128);
+    });
+});

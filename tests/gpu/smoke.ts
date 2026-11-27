@@ -180,6 +180,23 @@ renderer.renderFrame(40);
 }
 renderer.setEdgeWidth(0);
 
+// A selected edge is drawn wider than a normal one
+{
+    const [x, y] = toPixel(0, 0.6);
+    const thickness = async () => {
+        let t = 0;
+        for (let dy = -10; dy <= 10; dy++) if ((await readPixel(x, y + dy))[1] > 128) t++;
+        return t;
+    };
+    renderer.renderFrame(42);
+    const normal = await thickness();
+    renderer.setEdgeSelection(e, true);
+    renderer.renderFrame(44);
+    const selected = await thickness();
+    renderer.setEdgeSelection(e, false);
+    check('selected edges are drawn wider', selected >= normal * 2, `${normal}px → ${selected}px`);
+}
+
 graph.removeEdge(e);
 renderer.renderFrame(48);
 const gone = await sample(0, 0.6);
