@@ -215,7 +215,7 @@ export interface InteractionOptions {
     /** Enable multi-select (shift+click) */
     multiSelect?: boolean;
 
-    /** Enable lasso selection */
+    /** Box selection: shift-drag on empty canvas selects the nodes inside */
     lasso?: boolean;
 }
 
