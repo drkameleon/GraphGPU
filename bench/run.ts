@@ -16,8 +16,9 @@ import graph from './graph';
 import quadtree from './quadtree';
 import layout from './layout';
 import renderer from './renderer';
+import interaction from './interaction';
 
-const SUITES: BenchSuite[] = [graph, quadtree, layout, renderer];
+const SUITES: BenchSuite[] = [graph, quadtree, layout, renderer, interaction];
 
 // -----------------------------------------------------------
 // CLI options

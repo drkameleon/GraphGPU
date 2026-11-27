@@ -93,7 +93,22 @@ export class Graph {
     readonly tagColors: TagColorMap;
 
     // --- Dirty tracking for GPU upload ---
-    dirtyNodes: boolean = true;           // anything about nodes (incl. positions)
+    private _dirtyNodes: boolean = true;
+
+    /** Anything about nodes changed (incl. positions) */
+    get dirtyNodes(): boolean {
+        return this._dirtyNodes;
+    }
+    set dirtyNodes(dirty: boolean) {
+        this._dirtyNodes = dirty;
+        if (dirty) this.nodesVersion++;
+    }
+
+    /**
+     * Bumped whenever nodes are marked dirty (moved, added, removed,
+     * resized...), so caches like the picking grid know to rebuild.
+     */
+    nodesVersion: number = 0;
     dirtyNodeAttributes: boolean = true;  // colors / sizes (not just positions)
     dirtyEdges: boolean = true;
 

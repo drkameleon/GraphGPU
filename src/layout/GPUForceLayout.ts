@@ -394,6 +394,7 @@ export class GPUForceLayout {
             // The GPU has the truth and already draws it; this is only
             // the CPU cache. Re-apply edits the GPU hasn't seen yet.
             this.graph.reapplyPositionEdits();
+            this.graph.nodesVersion++; // CPU copy changed (e.g. for picking)
             this.target!.positionsChanged();
         } else {
             this.graph.dirtyNodes = true;

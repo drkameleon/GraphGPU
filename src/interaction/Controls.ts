@@ -2,18 +2,20 @@
 // graphGPU - Interaction Controller
 // ============================================================
 // Handles pointer input (mouse, touch, pen) for pan, zoom,
-// node picking, dragging, and selection. Spatial hit testing
-// via brute force (upgrade to quadtree for >50k nodes).
+// node/edge picking, dragging, and selection. Node picking goes
+// through a spatial grid (rebuilt only when nodes change); edges
+// are only picked when someone listens to edge events.
 //
 // Uses Pointer Events with pointer capture, so a drag keeps
 // tracking (and ends properly) even when released outside
 // the canvas.
 // ============================================================
 
-import type { NodeId, InteractionOptions, GraphGPUEventType, GraphGPUEventHandler } from '../types';
+import type { NodeId, EdgeId, InteractionOptions, GraphGPUEventType, GraphGPUEventHandler } from '../types';
 import type { Graph } from '../core/Graph';
 import type { ForceLayout } from '../layout/ForceLayout';
 import { Camera } from '../core/Camera';
+import { NodeGrid } from './SpatialIndex';
 
 interface DragState {
     active: boolean;
@@ -58,6 +60,12 @@ export class InteractionController {
     };
 
     private hoveredNode: NodeId | null = null;
+    private hoveredEdge: EdgeId | null = null;
+
+    // Picking grid (rebuilt when nodes or node scale change)
+    private grid = new NodeGrid();
+    private gridVersion = -1;
+    private gridScale = -1;
     private selectedNodes: Set<NodeId> = new Set();
 
     /** Active pointers (canvas coords), for pinch-zoom */
@@ -193,33 +201,66 @@ export class InteractionController {
     // Hit testing
     // =========================================================
 
-    /** Find the node at screen position (brute force) */
+    /** Find the node at screen position (closest one if several) */
     hitTest(screenX: number, screenY: number): NodeId | null {
+        // World-space hit radius matching shader: size * nodeScale * 0.01, +20% forgiveness
+        const radiusScale = this.nodeScale * 0.01 * 1.2;
+        if (this.gridVersion !== this.graph.nodesVersion || this.gridScale !== radiusScale) {
+            this.grid.build(this.graph, radiusScale);
+            this.gridVersion = this.graph.nodesVersion;
+            this.gridScale = radiusScale;
+        }
         const [wx, wy] = this.camera.screenToWorld(screenX, screenY);
+        return this.grid.query(wx, wy);
+    }
 
-        let closestId: NodeId | null = null;
-        let closestDist = Infinity;
+    /**
+     * Find the edge at screen position (closest one within its drawn
+     * width plus a few pixels), or null.
+     */
+    hitTestEdge(screenX: number, screenY: number): EdgeId | null {
+        const [wx, wy] = this.camera.screenToWorld(screenX, screenY);
+        const [, wy1] = this.camera.screenToWorld(screenX, screenY + 1);
+        const worldPerPx = Math.abs(wy1 - wy);
 
-        const positions = this.graph.positions;
-        const sizes = this.graph.sizes;
+        // Same width as the edge shader (half-width ≥ 1.25px), + 3px slack
+        const halfWidth = Math.max(1.25 * worldPerPx, this.nodeScale * 0.01);
+        const tolerance = halfWidth + 3 * worldPerPx;
 
-        for (const id of this.graph.activeNodeIds()) {
-            const nx = positions[id * 2];
-            const ny = positions[id * 2 + 1];
-            const dx = wx - nx;
-            const dy = wy - ny;
-            const dist = Math.sqrt(dx * dx + dy * dy);
+        const graph = this.graph;
+        const pos = graph.positions;
+        const idx = graph.edgeIndices;
+        let best: EdgeId | null = null;
+        let bestDist = tolerance;
 
-            // World-space hit radius matching shader: size * nodeScale * 0.01
-            const hitRadius = sizes[id] * this.nodeScale * 0.01 * 1.2; // 20% forgiveness
+        for (let e = 0; e < graph.edgeSlots; e++) {
+            if (graph.getEdgeTag(e) === undefined) continue;
+            const a = idx[e * 2], b = idx[e * 2 + 1];
+            if (a === b || !graph.isNodeActive(a) || !graph.isNodeActive(b)) continue;
 
-            if (dist < hitRadius && dist < closestDist) {
-                closestDist = dist;
-                closestId = id;
+            const ax = pos[a * 2], ay = pos[a * 2 + 1];
+            const bx = pos[b * 2], by = pos[b * 2 + 1];
+            // Quick reject on the segment's bounding box
+            if (wx < Math.min(ax, bx) - tolerance || wx > Math.max(ax, bx) + tolerance ||
+                wy < Math.min(ay, by) - tolerance || wy > Math.max(ay, by) + tolerance) continue;
+
+            const dx = bx - ax, dy = by - ay;
+            const lenSq = dx * dx + dy * dy;
+            const t = lenSq > 0 ? Math.max(0, Math.min(1, ((wx - ax) * dx + (wy - ay) * dy) / lenSq)) : 0;
+            const dist = Math.hypot(wx - (ax + t * dx), wy - (ay + t * dy));
+            if (dist < bestDist) {
+                bestDist = dist;
+                best = e;
             }
         }
+        return best;
+    }
 
-        return closestId;
+    /** Edge picking only runs when someone listens to edge events */
+    private wantsEdges(): boolean {
+        return (this.listeners.get('edge:click')?.size ?? 0) > 0 ||
+            (this.listeners.get('edge:hover')?.size ?? 0) > 0 ||
+            (this.listeners.get('edge:hoverout')?.size ?? 0) > 0;
     }
 
     // =========================================================
@@ -304,7 +345,10 @@ export class InteractionController {
         if (this.drag.active && e.pointerId === this.drag.pointerId) {
             this.onDrag(sx, sy);
         } else if (!this.drag.active && this.opts.hover && e.pointerType !== 'touch') {
-            this.updateHover(this.hitTest(sx, sy));
+            const node = this.hitTest(sx, sy);
+            this.updateHover(node);
+            // Edges under nodes don't count
+            this.updateEdgeHover(node === null && this.wantsEdges() ? this.hitTestEdge(sx, sy) : null);
         }
     }
 
@@ -347,14 +391,16 @@ export class InteractionController {
 
             if (isClick) this.emit('node:click', this.graph.getNode(id), e);
         } else if (isClick) {
-            // Clicked empty canvas - deselect all
+            // Clicked away from nodes - deselect all
             if (this.opts.selection) {
                 for (const id of this.selectedNodes) {
                     this.emit('node:deselect', this.graph.getNode(id), e);
                 }
                 this.selectedNodes.clear();
             }
-            this.emit('canvas:click', null, e);
+            const edge = this.wantsEdges() ? this.hitTestEdge(this.drag.startX, this.drag.startY) : null;
+            if (edge !== null) this.emit('edge:click', this.graph.getEdge(edge), e);
+            else this.emit('canvas:click', null, e);
         }
 
         this.resetDrag();
@@ -371,6 +417,7 @@ export class InteractionController {
         // Captured pointers keep reporting; only clear plain hover
         if (!this.drag.active && e.pointerType !== 'touch') {
             this.updateHover(null);
+            this.updateEdgeHover(null);
         }
     }
 
@@ -439,6 +486,20 @@ export class InteractionController {
             this.emit('node:hover', this.graph.getNode(hitNode));
             this.canvas.style.cursor = 'pointer';
         } else {
+            this.canvas.style.cursor = 'grab';
+        }
+    }
+
+    private updateEdgeHover(edge: EdgeId | null): void {
+        if (edge === this.hoveredEdge) return;
+        if (this.hoveredEdge !== null) {
+            this.emit('edge:hoverout', this.graph.getEdge(this.hoveredEdge));
+        }
+        this.hoveredEdge = edge;
+        if (edge !== null) {
+            this.emit('edge:hover', this.graph.getEdge(edge));
+            this.canvas.style.cursor = 'pointer';
+        } else if (this.hoveredNode === null) {
             this.canvas.style.cursor = 'grab';
         }
     }
