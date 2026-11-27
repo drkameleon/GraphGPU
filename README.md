@@ -152,6 +152,7 @@ new GraphGPU({
 |--------|-------------|
 | `setSelectionEnabled(bool)` | Toggle node selection |
 | `setMultiSelectEnabled(bool)` | Toggle always-on multi-select |
+| `interaction: { lasso: true }` | Box selection: shift-drag on empty canvas selects the nodes inside |
 | `on(event, handler)` | Listen for events |
 | `off(event, handler)` | Remove listener |
 
