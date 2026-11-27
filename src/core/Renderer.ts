@@ -8,6 +8,7 @@
 import type { GraphGPUOptions, RenderStats } from '../types';
 import type { Graph } from './Graph';
 import { Camera } from './Camera';
+import type { PositionTarget } from '../layout/GPUForceLayout';
 import { NODE_SHADER, EDGE_SHADER } from '../shaders';
 import { parseColor } from '../utils/color';
 
@@ -21,7 +22,7 @@ const NODE_UNIFORM_SIZE = 4 * (12 + 2 + 1 + 1); // 64 bytes
 // EdgeUniforms: camera (3×vec4) + viewport (vec2) + edgeOpacity (f32) + nodeScale (f32)
 const EDGE_UNIFORM_SIZE = 4 * (12 + 2 + 1 + 1); // 64 bytes
 
-export class Renderer {
+export class Renderer implements PositionTarget {
     private device!: GPUDevice;
     private context!: GPUCanvasContext;
     private format!: GPUTextureFormat;
@@ -84,6 +85,9 @@ export class Renderer {
     private initialized: boolean = false;
     private animationId: number = 0;
     private labelsVisible: boolean = true;
+
+    // Positions owned by the GPU layout (shared buffer, no CPU uploads)
+    private externalPositions: boolean = false;
 
     // Render on demand: frames are only drawn when something changed
     private needsRender: boolean = true;
@@ -332,14 +336,16 @@ export class Renderer {
 
     private reallocNodeBuffers(capacity: number): void {
         const cap = Math.max(capacity, 256);
-        this.gpuPositions?.destroy();
+        const oldPositions = this.gpuPositions;
+        const oldCapacity = this.gpuNodeCapacity;
         this.gpuColors?.destroy();
         this.gpuSizes?.destroy();
         this.gpuSelection?.destroy();
 
         this.gpuPositions = this.device.createBuffer({
             size: cap * 2 * 4,
-            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.STORAGE |
+                GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
         });
         this.gpuColors = this.device.createBuffer({
             size: cap * 4 * 4,
@@ -355,6 +361,17 @@ export class Renderer {
         });
         this.gpuNodeCapacity = cap;
         this.createEdgeBindGroup();
+
+        if (oldPositions) {
+            // While the GPU layout owns positions, the GPU copy is the
+            // only up-to-date one: carry it over
+            if (this.externalPositions && oldCapacity > 0) {
+                const encoder = this.device.createCommandEncoder();
+                encoder.copyBufferToBuffer(oldPositions, 0, this.gpuPositions, 0, Math.min(oldCapacity, cap) * 8);
+                this.device.queue.submit([encoder.finish()]);
+            }
+            oldPositions.destroy();
+        }
     }
 
     private reallocEdgeBuffers(capacity: number): void {
@@ -381,10 +398,16 @@ export class Renderer {
             this.selectionData.set(old);
         }
 
-        this.device.queue.writeBuffer(
-            this.gpuPositions, 0,
-            this.graph.positions.buffer, 0, n * 2 * 4,
-        );
+        if (this.externalPositions) {
+            // The GPU layout writes positions; only send explicit edits
+            // (dragged / added / reset nodes)
+            this.flushPositionEdits();
+        } else {
+            this.device.queue.writeBuffer(
+                this.gpuPositions, 0,
+                this.graph.positions.buffer, 0, n * 2 * 4,
+            );
+        }
         this.device.queue.writeBuffer(
             this.gpuColors, 0,
             this.graph.colors.buffer, 0, n * 4 * 4,
@@ -592,6 +615,43 @@ export class Renderer {
         };
         this.invalidate();
         this.animationId = requestAnimationFrame(loop);
+    }
+
+    // =========================================================
+    // Shared positions (PositionTarget, for the GPU layout)
+    // =========================================================
+
+    acquirePositions(slots: number): GPUBuffer {
+        if (!this.externalPositions) {
+            this.externalPositions = true;
+            this.graph.trackPositionEdits(true);
+        }
+        if (slots > this.gpuNodeCapacity) {
+            this.reallocNodeBuffers(slots);
+            this.graph.dirtyNodes = true; // colors/sizes need re-uploading
+        }
+        return this.gpuPositions;
+    }
+
+    releasePositions(): void {
+        if (!this.externalPositions) return;
+        this.flushPositionEdits();
+        this.externalPositions = false;
+        this.graph.trackPositionEdits(false);
+        // CPU positions are in sync again
+        this.graph.dirtyNodes = true;
+        this.invalidate();
+    }
+
+    positionsChanged(): void {
+        this.invalidate();
+    }
+
+    private flushPositionEdits(): void {
+        for (const [id, [x, y]] of this.graph.takePositionEdits()) {
+            if (id >= this.gpuNodeCapacity) continue; // covered by the next full sync
+            this.device.queue.writeBuffer(this.gpuPositions, id * 8, new Float32Array([x, y]));
+        }
     }
 
     /** Force the next frame to be drawn */
