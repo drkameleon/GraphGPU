@@ -44,7 +44,8 @@ export class Graph {
     // --- Node metadata (not uploaded to GPU) ---
     private nodeTags: string[];
     private nodeProperties: Record<string, unknown>[];
-    private nodeCount: number = 0;
+    private nodeCount: number = 0;     // slots in use (highest id + 1)
+    private liveNodes: number = 0;     // active nodes
     private nodeCapacity: number;
 
     // --- Edge SoA buffers ---
@@ -55,7 +56,8 @@ export class Graph {
     // --- Edge metadata ---
     private edgeTags: string[];
     private edgeProperties: Record<string, unknown>[];
-    private edgeCount: number = 0;
+    private edgeCount: number = 0;     // slots in use (highest id + 1)
+    private liveEdges: number = 0;     // active edges
     private edgeCapacity: number;
 
     // --- Free lists for reuse after deletion ---
@@ -110,11 +112,27 @@ export class Graph {
 
     /** Number of active nodes */
     get numNodes(): number {
-        return this.nodeCount;
+        return this.liveNodes;
     }
 
     /** Number of active edges */
     get numEdges(): number {
+        return this.liveEdges;
+    }
+
+    /**
+     * Number of node slots in use (highest node id + 1), including
+     * removed ones. This is the extent of the node buffers.
+     */
+    get nodeSlots(): number {
+        return this.nodeCount;
+    }
+
+    /**
+     * Number of edge slots in use (highest edge id + 1), including
+     * removed ones. This is the extent of the edge buffers.
+     */
+    get edgeSlots(): number {
         return this.edgeCount;
     }
 
@@ -132,6 +150,7 @@ export class Graph {
         }
 
         this.nodeCount = Math.max(this.nodeCount, id + 1);
+        this.liveNodes++;
 
         // Position
         const px = input.x ?? (Math.random() - 0.5) * 2;
@@ -188,6 +207,7 @@ export class Graph {
         this.nodeProperties[id] = undefined!;
 
         this.freeNodes.push(id);
+        this.liveNodes--;
 
         // Shrink nodeCount if we deleted from the tail
         // This avoids iterating/uploading dead trailing slots
@@ -275,6 +295,7 @@ export class Graph {
         }
 
         this.edgeCount = Math.max(this.edgeCount, id + 1);
+        this.liveEdges++;
 
         this.edgeIndices[id * 2] = input.source;
         this.edgeIndices[id * 2 + 1] = input.target;
@@ -331,6 +352,7 @@ export class Graph {
         this.edgeProperties[id] = undefined!;
 
         this.freeEdges.push(id);
+        this.liveEdges--;
 
         // Shrink edgeCount if we deleted from the tail
         while (this.edgeCount > 0 && this.edgeTags[this.edgeCount - 1] === undefined) {
@@ -473,6 +495,8 @@ export class Graph {
     clear(): void {
         this.nodeCount = 0;
         this.edgeCount = 0;
+        this.liveNodes = 0;
+        this.liveEdges = 0;
         this.freeNodes.length = 0;
         this.freeEdges.length = 0;
         this.positions.fill(0);
