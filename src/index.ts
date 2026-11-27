@@ -70,6 +70,7 @@ export class GraphGPU {
             options.interaction,
             options.nodeSize,
         );
+        if (options.edgeWidth) this.controls.setEdgeWidth(options.edgeWidth);
     }
 
     // =========================================================
@@ -494,6 +495,14 @@ export class GraphGPU {
     setNodeSize(size: number): void {
         this.renderer.setNodeScale(size);
         this.controls.setNodeScale(size);
+    }
+
+    /**
+     * Set a fixed edge width in CSS pixels (0 = scale with node size).
+     */
+    setEdgeWidth(width: number): void {
+        this.renderer.setEdgeWidth(width);
+        this.controls.setEdgeWidth(width);
     }
 
     /**

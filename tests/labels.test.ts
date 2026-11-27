@@ -71,7 +71,10 @@ function recordingContext() {
 const W = 1000;
 const H = 700;
 
-async function scene(nodes: number, edges: number, seed: number, nodeSize: number) {
+async function scene(
+    nodes: number, edges: number, seed: number, nodeSize: number,
+    labels?: import('../src/types').LabelOptions,
+) {
     const rand = seededRandom(seed);
     const graph = new Graph();
     const words = ['alpha', 'beta', 'gamma', 'a fairly long node label', 'δέλτα', 'x'];
@@ -101,7 +104,7 @@ async function scene(nodes: number, edges: number, seed: number, nodeSize: numbe
     Object.defineProperty(canvas, 'clientHeight', { value: H });
 
     installFakeWebGPU(canvas);
-    const renderer = new Renderer(graph, { canvas, pixelRatio: 1, nodeSize });
+    const renderer = new Renderer(graph, { canvas, pixelRatio: 1, nodeSize, labels });
     await renderer.init();
     renderer.initLabelOverlay();
     return { graph, renderer };
@@ -171,5 +174,49 @@ describe('Label overlay', () => {
         renderer.renderFrame(32);
         expect(drawn).toMatchSnapshot();
         renderer.destroy();
+    });
+});
+
+describe('Label options', () => {
+    async function nodeLabels(labels: import('../src/types').LabelOptions, zoom = 4) {
+        drawn = [];
+        const { renderer } = await scene(60, 0, 8, 1, labels);
+        renderer.getCamera().setZoom(zoom);
+        renderer.renderFrame(16);
+        renderer.destroy();
+        return [...drawn];
+    }
+
+    it('uses the given property as label', async () => {
+        const texts = (await nodeLabels({ property: 'name' })).map(d => d.text);
+        const byTag = (await nodeLabels({ property: 'nope' })).map(d => d.text);
+        expect(texts.length).toBeGreaterThan(0);
+        expect(byTag).toEqual([]); // no such property: no labels
+    });
+
+    it('truncates to maxLength', async () => {
+        const texts = (await nodeLabels({ maxLength: 4 })).map(d => d.text);
+        expect(texts.length).toBeGreaterThan(0);
+        for (const t of texts) expect(t.replace('…', '').length).toBeLessThanOrEqual(4);
+    });
+
+    it('uses the given font family and color', async () => {
+        const labels = await nodeLabels({ font: 'Inter, sans-serif', color: '#ff0000' });
+        expect(labels.length).toBeGreaterThan(0);
+        for (const l of labels) {
+            expect(l.font).toMatch(/px Inter, sans-serif$/);
+            expect(l.fill).toBe('#ff0000');
+        }
+        const rgb = await nodeLabels({ color: [0, 0.5, 1] });
+        expect(rgb[0].fill).toBe('rgba(0,128,255,1)');
+    });
+
+    it('starts hidden with enabled: false', async () => {
+        expect(await nodeLabels({ enabled: false })).toEqual([]);
+    });
+
+    it('hides labels below visibleAtZoom', async () => {
+        expect(await nodeLabels({ visibleAtZoom: 5 }, 4)).toEqual([]);
+        expect((await nodeLabels({ visibleAtZoom: 5 }, 6)).length).toBeGreaterThan(0);
     });
 });
