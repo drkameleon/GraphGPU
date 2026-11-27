@@ -792,6 +792,11 @@ export class Renderer implements PositionTarget {
         this.backgroundColor = color;
     }
 
+    /** Current node scale (world size = size × scale × 0.01) */
+    getNodeScale(): number {
+        return this.nodeScale;
+    }
+
     /** Change node scale at runtime */
     setNodeScale(scale: number): void {
         this.invalidate();

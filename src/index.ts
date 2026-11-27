@@ -442,8 +442,13 @@ export class GraphGPU {
      */
     applyLayout(type: 'circular' | 'grid', opts?: StaticLayoutOptions): void {
         this.stopLayout();
-        if (type === 'circular') circularLayout(this.graph, opts);
-        else gridLayout(this.graph, opts);
+        // Default spacing: 1.5× the biggest node's diameter, so nodes never overlap
+        let maxSize = 0;
+        for (const id of this.graph.activeNodeIds()) maxSize = Math.max(maxSize, this.graph.sizes[id]);
+        const spacing = opts?.spacing ?? Math.max(0.02, maxSize * this.renderer.getNodeScale() * 0.01 * 2 * 1.5);
+        const options = { ...opts, spacing };
+        if (type === 'circular') circularLayout(this.graph, options);
+        else gridLayout(this.graph, options);
     }
 
     /**
