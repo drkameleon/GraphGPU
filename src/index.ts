@@ -587,6 +587,7 @@ export class GraphGPU {
      */
     markDirty(): void {
         this.graph.dirtyNodes = true;
+        this.graph.dirtyNodeAttributes = true; // colors/sizes may have been edited too
         this.graph.dirtyEdges = true;
         this.graph.edgeColorVersion++; // edge buffers may have been edited too
     }

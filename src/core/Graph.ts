@@ -93,7 +93,8 @@ export class Graph {
     readonly tagColors: TagColorMap;
 
     // --- Dirty tracking for GPU upload ---
-    dirtyNodes: boolean = true;
+    dirtyNodes: boolean = true;           // anything about nodes (incl. positions)
+    dirtyNodeAttributes: boolean = true;  // colors / sizes (not just positions)
     dirtyEdges: boolean = true;
 
     /**
@@ -215,6 +216,7 @@ export class Graph {
         this.nodeProperties[id] = input.properties ?? {};
 
         this.dirtyNodes = true;
+        this.dirtyNodeAttributes = true;
         return id;
     }
 
@@ -262,6 +264,7 @@ export class Graph {
         // skipped lazily by popFreeSlot instead of filtered here (O(1))
 
         this.dirtyNodes = true;
+        this.dirtyNodeAttributes = true;
     }
 
     /** Get a node view (allocates - use sparingly in hot paths) */
@@ -329,12 +332,14 @@ export class Graph {
         writeColorToBuffer(this.colors, id * 4, color);
         this.customColor[id] = 1;
         this.dirtyNodes = true;
+        this.dirtyNodeAttributes = true;
     }
 
     /** Update node size */
     setNodeSize(id: NodeId, size: number): void {
         this.sizes[id] = size;
         this.dirtyNodes = true;
+        this.dirtyNodeAttributes = true;
     }
 
     /** Update node property */
@@ -581,6 +586,7 @@ export class Graph {
         this.edgeProperties.length = 0;
         this.tagColors.clear();
         this.dirtyNodes = true;
+        this.dirtyNodeAttributes = true;
         this.dirtyEdges = true;
     }
 
@@ -604,6 +610,7 @@ export class Graph {
         }
         this.edgeColorVersion++;
         this.dirtyNodes = true;
+        this.dirtyNodeAttributes = true;
         this.dirtyEdges = true;
     }
 

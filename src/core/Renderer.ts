@@ -385,10 +385,17 @@ export class Renderer implements PositionTarget {
         this.edgeData = new Uint32Array(cap * 3);
     }
 
+    /**
+     * Upload node data. Moving nodes (layouts, dragging) only marks
+     * positions dirty, so usually only 8 bytes per node go up; colors
+     * and sizes only when they changed, selection only when it did.
+     */
     private uploadNodeData(): void {
         const n = this.graph.nodeSlots;
+        let all = this.graph.dirtyNodeAttributes;
         if (n > this.gpuNodeCapacity) {
             this.reallocNodeBuffers(n * 2);
+            all = true; // fresh buffers
         }
 
         // Grow selection buffer if needed
@@ -402,26 +409,33 @@ export class Renderer implements PositionTarget {
             // The GPU layout writes positions; only send explicit edits
             // (dragged / added / reset nodes)
             this.flushPositionEdits();
-        } else {
+        } else if (this.graph.dirtyNodes || all) {
             this.device.queue.writeBuffer(
                 this.gpuPositions, 0,
                 this.graph.positions.buffer, 0, n * 2 * 4,
             );
         }
-        this.device.queue.writeBuffer(
-            this.gpuColors, 0,
-            this.graph.colors.buffer, 0, n * 4 * 4,
-        );
-        this.device.queue.writeBuffer(
-            this.gpuSizes, 0,
-            this.graph.sizes.buffer, 0, n * 4,
-        );
-        this.device.queue.writeBuffer(
-            this.gpuSelection, 0,
-            this.selectionData.buffer, 0, n * 4,
-        );
+
+        if (all) {
+            this.device.queue.writeBuffer(
+                this.gpuColors, 0,
+                this.graph.colors.buffer, 0, n * 4 * 4,
+            );
+            this.device.queue.writeBuffer(
+                this.gpuSizes, 0,
+                this.graph.sizes.buffer, 0, n * 4,
+            );
+        }
+
+        if (this.selectionDirty || all) {
+            this.device.queue.writeBuffer(
+                this.gpuSelection, 0,
+                this.selectionData.buffer, 0, n * 4,
+            );
+        }
 
         this.graph.dirtyNodes = false;
+        this.graph.dirtyNodeAttributes = false;
         this.selectionDirty = false;
     }
 
@@ -490,7 +504,7 @@ export class Renderer implements PositionTarget {
 
         // Upload dirty data. Edges follow node positions on the GPU,
         // so moving nodes only uploads node data.
-        if (this.graph.dirtyNodes || this.graph.dirtyEdges || this.selectionDirty) {
+        if (this.graph.dirtyNodes || this.graph.dirtyNodeAttributes || this.selectionDirty) {
             this.uploadNodeData();
         }
         if (this.uploadedStructure !== this.graph.structureVersion ||
@@ -628,7 +642,8 @@ export class Renderer implements PositionTarget {
         }
         if (slots > this.gpuNodeCapacity) {
             this.reallocNodeBuffers(slots);
-            this.graph.dirtyNodes = true; // colors/sizes need re-uploading
+            this.graph.dirtyNodes = true;
+            this.graph.dirtyNodeAttributes = true; // new buffers: colors/sizes too
         }
         return this.gpuPositions;
     }
@@ -664,6 +679,7 @@ export class Renderer implements PositionTarget {
         return this.needsRender ||
             this.camera.dirty ||
             this.graph.dirtyNodes ||
+            this.graph.dirtyNodeAttributes ||
             this.graph.dirtyEdges ||
             this.selectionDirty;
     }
