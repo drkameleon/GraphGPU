@@ -206,6 +206,66 @@ describe('Graph: edges', () => {
     });
 });
 
+describe('Graph: counts', () => {
+    it('counts only live nodes and edges', () => {
+        const g = new Graph();
+        const ids = [0, 1, 2, 3].map(() => g.addNode({ tag: 'n' }));
+        const e01 = g.addEdge({ tag: 'e', source: ids[0], target: ids[1] });
+        g.addEdge({ tag: 'e', source: ids[2], target: ids[3] });
+        g.addEdge({ tag: 'e', source: ids[1], target: ids[2] });
+
+        g.removeNode(ids[1]); // middle node, takes 2 edges with it
+        expect(g.numNodes).toBe(3);
+        expect(g.numEdges).toBe(1);
+        expect(g.nodeSlots).toBe(4);
+
+        g.removeEdge(e01); // already gone with its node
+        expect(g.numEdges).toBe(1);
+    });
+
+    it('does not double-count repeated removals', () => {
+        const g = new Graph();
+        const a = g.addNode({ tag: 'n' });
+        g.addNode({ tag: 'n' });
+        g.removeNode(a);
+        g.removeNode(a);
+        g.removeNode(-1);
+        expect(g.numNodes).toBe(1);
+    });
+
+    it('counts reused slots once', () => {
+        const g = new Graph();
+        g.addNode({ tag: 'n' });
+        const b = g.addNode({ tag: 'n' });
+        g.addNode({ tag: 'n' });
+        g.removeNode(b);
+        g.addNode({ tag: 'n' });
+        expect(g.numNodes).toBe(3);
+        expect(g.nodeSlots).toBe(3);
+    });
+
+    it('shrinks slots when the tail is removed', () => {
+        const g = new Graph();
+        g.addNode({ tag: 'n' });
+        const b = g.addNode({ tag: 'n' });
+        g.removeNode(b);
+        expect(g.numNodes).toBe(1);
+        expect(g.nodeSlots).toBe(1);
+    });
+
+    it('resets counts on clear', () => {
+        const g = new Graph();
+        const a = g.addNode({ tag: 'n' });
+        const b = g.addNode({ tag: 'n' });
+        g.addEdge({ tag: 'e', source: a, target: b });
+        g.clear();
+        expect(g.numNodes).toBe(0);
+        expect(g.numEdges).toBe(0);
+        expect(g.nodeSlots).toBe(0);
+        expect(g.edgeSlots).toBe(0);
+    });
+});
+
 describe('Graph: queries', () => {
     function sample() {
         const g = new Graph();
