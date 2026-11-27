@@ -275,6 +275,25 @@ describe('Graph: lifecycle', () => {
         expect(g.tagColors.getAll().size).toBe(0);
     });
 
+    it('forgets old edges after clear', () => {
+        const g = new Graph();
+        const a = g.addNode({ tag: 'n' });
+        const b = g.addNode({ tag: 'n' });
+        g.addEdge({ tag: 'old', source: a, target: b });
+        g.clear();
+
+        // Same ids get reused: node 0 must not still "own" edge 0
+        const c = g.addNode({ tag: 'n' });
+        const d = g.addNode({ tag: 'n' });
+        const e = g.addNode({ tag: 'n' });
+        const de = g.addEdge({ tag: 'new', source: d, target: e });
+
+        g.removeNode(c);
+        expect(g.isEdgeActive(de)).toBe(true);
+        expect(g.getEdge(de)!.tag).toBe('new');
+        expect(g.getNodeEdges(d)).toHaveLength(1);
+    });
+
     it('starts fresh ids after clear', () => {
         const g = new Graph();
         g.addNode({ tag: 'n' });
