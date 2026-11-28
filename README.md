@@ -32,7 +32,7 @@
 
 ### What does this do?
 
-**GraphGPU** is a hardware-accelerated graph visualization library. Rendering is powered entirely by WebGPU — nodes, edges, selection halos, and labels all go through GPU pipelines. The physics simulation (force-directed layout) runs on either CPU or GPU compute shaders, with a  model featuring gravitational repulsion, Hooke's law springs, central gravity, and proper velocity integration.
+**GraphGPU** is a hardware-accelerated graph visualization library. Nodes, edges and selection halos are drawn through WebGPU pipelines (labels go on a Canvas2D overlay on top). The physics simulation (force-directed layout) runs on either CPU or GPU compute shaders, with a model featuring gravitational repulsion, Hooke's law springs, central gravity, and proper velocity integration.
 
 > [!NOTE]
 > WebGPU is supported in Chrome 113+, Edge 113+, and Firefox Nightly. Safari has experimental support behind a flag. GraphGPU shows a fallback message on unsupported browsers.
